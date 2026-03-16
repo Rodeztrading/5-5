@@ -14,7 +14,7 @@ import { usePWAInstall } from './hooks/usePWAInstall';
 const App: React.FC = () => {
   const { user, loading: authLoading, logout } = useAuth();
   const { isInstallable, installApp } = usePWAInstall();
-  const [view, setView] = useState<ViewState>(ViewState.SNIPER); // ViewState.SNIPER will remain the enum value for logic consistency unless I change the enum too, but for UI it will be RODEZ
+  const [view, setView] = useState<ViewState>(ViewState.BUDGET); // Set initial view to BudgetView as requested
   const [trades, setTrades] = useState<VisualTrade[]>([]);
   const [loading, setLoading] = useState(true);
   const [showBudgetResetConfirm, setShowBudgetResetConfirm] = useState(false);
