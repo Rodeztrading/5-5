@@ -1,0 +1,61 @@
+<!DOCTYPE html>
+<html lang="es">
+
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>RODEZ Trade Monitor</title>
+  <meta name="theme-color" content="#0d1117">
+  <link rel="apple-touch-icon" href="/pwa-192x192.png">
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          colors: {
+            gray: {
+              750: '#2d3748',
+              850: '#1a202c',
+              950: '#0d1117',
+            },
+            rodez: {
+              green: '#00ff9d',
+              red: '#ef4444',
+              blue: '#3b82f6'
+            }
+          },
+          animation: {
+            'pulse-slow': 'pulse 3s cubic-bezier(0.4, 0, 0.6, 1) infinite',
+          }
+        },
+      },
+    }
+  </script>
+  <style>
+    /* Custom scrollbar for webkit */
+    ::-webkit-scrollbar {
+      width: 8px;
+      height: 8px;
+    }
+
+    ::-webkit-scrollbar-track {
+      background: #0d1117;
+    }
+
+    ::-webkit-scrollbar-thumb {
+      background: #2d3748;
+      border-radius: 4px;
+    }
+
+    ::-webkit-scrollbar-thumb:hover {
+      background: #4a5568;
+    }
+  </style>
+</head>
+
+<body class="bg-gray-950 text-white antialiased overflow-hidden">
+  <div id="root"></div>
+  <script type="module" src="/index.tsx"></script>
+</body>
+
+</html>
