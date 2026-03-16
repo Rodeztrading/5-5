@@ -28,6 +28,7 @@ export const DominicView: React.FC = () => {
     const [checklistResponsible, setChecklistResponsible] = useState<'MOM' | 'DAD'>('DAD');
     
     const [isAddingAnnual, setIsAddingAnnual] = useState(false);
+    const [showAllAnnuals, setShowAllAnnuals] = useState(false);
     const [annualText, setAnnualText] = useState('');
     const [annualDay, setAnnualDay] = useState(1);
     const [annualMonth, setAnnualMonth] = useState(0);
@@ -53,12 +54,30 @@ export const DominicView: React.FC = () => {
             if (data.length === 0) {
                 console.log('[DEBUG] No hay datos fijos en Firestore.');
             } else {
-                alert('[DEBUG] Recordatorios fijos cargados: ' + data.length);
+                // alert('[DEBUG] Recordatorios fijos cargados: ' + data.length);
             }
             setAnnualReminders(data);
         });
         return () => { unsubscribeOverrides(); unsubscribeReminders(); unsubscribeAnnual(); };
     }, [user]);
+
+    // Precompute sorted annual reminders by proximity
+    const sortedAnnualReminders = useMemo(() => {
+        const today = new Date();
+        today.setHours(0, 0, 0, 0);
+
+        return [...annualReminders].sort((a, b) => {
+            const dateA = new Date(today.getFullYear(), a.month, a.day);
+            dateA.setHours(0, 0, 0, 0);
+            if (dateA < today) dateA.setFullYear(today.getFullYear() + 1);
+
+            const dateB = new Date(today.getFullYear(), b.month, b.day);
+            dateB.setHours(0, 0, 0, 0);
+            if (dateB < today) dateB.setFullYear(today.getFullYear() + 1);
+
+            return dateA.getTime() - dateB.getTime();
+        });
+    }, [annualReminders]);
 
     // Diagnostic alert to show data has arrived
     useEffect(() => {
@@ -252,18 +271,27 @@ export const DominicView: React.FC = () => {
                                 <div className="flex items-center p-3 bg-pink-500/10 border border-pink-500/20 rounded-xl"><div className="w-3 h-3 rounded-full bg-pink-500 mr-3"></div><span className="text-pink-100 font-bold text-xs uppercase">MAMÁ</span></div>
                                 <div className="flex items-center p-3 bg-blue-500/10 border border-blue-500/20 rounded-xl"><div className="w-3 h-3 rounded-full bg-blue-500 mr-3"></div><span className="text-blue-100 font-bold text-xs uppercase">PAPÁ</span></div>
                             </div>
-                            <div className="bg-gray-900 shadow-xl border border-gray-800 rounded-2xl overflow-hidden">
-                                <button onClick={() => setIsAddingAnnual(!isAddingAnnual)} className="w-full flex items-center justify-between p-4 hover:bg-gray-800/50 transition-all border-b border-gray-800">
+                            <div className="bg-gray-900 shadow-xl border border-gray-800 rounded-2xl overflow-hidden cursor-pointer" onClick={() => setShowAllAnnuals(true)}>
+                                <div className="flex items-center justify-between p-4 hover:bg-gray-800/50 transition-all border-b border-gray-800">
                                     <span className="text-[10px] font-black tracking-widest text-gray-400 uppercase flex items-center"><Calendar className="w-3 h-3 mr-2 text-rodez-red" /> Recordatorios Fijos</span>
-                                    <Plus className={`w-4 h-4 text-rodez-red transition-transform ${isAddingAnnual ? 'rotate-45' : ''}`} />
-                                </button>
-                                <div className="max-h-[150px] overflow-y-auto custom-scrollbar p-2 space-y-1">
-                                    {annualReminders.length > 0 ? annualReminders.map(rem => (
-                                        <div key={rem.id} className="flex justify-between items-center bg-gray-950 p-2 rounded-lg border border-gray-800/50 group">
-                                            <div className="flex flex-col"><span className="text-[10px] font-bold text-gray-200">{rem.text}</span><span className="text-[8px] text-gray-500">{rem.day}/{rem.month + 1}</span></div>
-                                            <button onClick={() => deleteAnnualReminder(rem.id)} className="opacity-0 group-hover:opacity-100 text-gray-600 hover:text-red-500 transition-all px-2"><Trash2 className="w-3 h-3" /></button>
+                                    <div className="flex items-center gap-2">
+                                        {annualReminders.length > 0 && <span className="bg-gray-800 text-gray-100 text-[10px] font-black px-2 py-0.5 rounded-lg">{annualReminders.length}</span>}
+                                        <Plus onClick={(e) => { e.stopPropagation(); setIsAddingAnnual(true); }} className={`w-4 h-4 text-rodez-red transition-transform hover:scale-120`} />
+                                    </div>
+                                </div>
+                                <div className="p-3">
+                                    {sortedAnnualReminders.length > 0 ? (
+                                        <div className="flex justify-between items-center bg-gray-950 p-3 rounded-xl border border-rodez-red/20 shadow-lg shadow-rodez-red/5">
+                                            <div className="flex flex-col">
+                                                <span className="text-xs font-black text-rodez-red uppercase tracking-tighter mb-1">Próximo Evento</span>
+                                                <span className="text-sm font-bold text-gray-100">{sortedAnnualReminders[0].text}</span>
+                                                <span className="text-[10px] text-gray-500 font-bold">{sortedAnnualReminders[0].day}/{sortedAnnualReminders[0].month + 1}</span>
+                                            </div>
+                                            <div className="bg-rodez-red/20 p-2 rounded-full"><Calendar className="w-4 h-4 text-rodez-red" /></div>
                                         </div>
-                                    )) : <div className="text-[9px] text-gray-700 italic text-center py-4">No hay recordatorios fijos</div>}
+                                    ) : (
+                                        <div className="text-[9px] text-gray-700 italic text-center py-4">No hay recordatorios fijos</div>
+                                    )}
                                 </div>
                             </div>
                         </div>
@@ -343,6 +371,34 @@ export const DominicView: React.FC = () => {
                     </div>
                 </div>
             </div>
+
+            {/* MODAL: Full Annual Reminders List */}
+            {showAllAnnuals && (
+                <div className="fixed inset-0 z-[70] bg-black/95 flex items-center justify-center p-4 backdrop-blur-sm">
+                    <div className="bg-gray-900 border border-gray-800 w-full max-w-lg rounded-[2.5rem] p-8 space-y-6 shadow-2xl animate-in fade-in zoom-in-95 overflow-hidden flex flex-col max-h-[80vh]">
+                        <div className="flex items-center justify-between flex-shrink-0">
+                            <h3 className="text-xl font-black flex items-center"><Calendar className="w-6 h-6 mr-3 text-rodez-red" /> Todos los Recordatorios</h3>
+                            <button onClick={() => setShowAllAnnuals(false)} className="p-2 hover:bg-gray-800 rounded-full transition-all"><ChevronLeft className="w-5 h-5 rotate-90" /></button>
+                        </div>
+                        <div className="flex-1 overflow-y-auto custom-scrollbar pr-2 space-y-3">
+                            {sortedAnnualReminders.map((rem, i) => (
+                                <div key={rem.id} className={`flex justify-between items-center bg-gray-950 p-4 rounded-2xl border transition-all ${i === 0 ? 'border-rodez-red/50 shadow-lg shadow-rodez-red/5' : 'border-gray-800'}`}>
+                                    <div className="flex items-center gap-4">
+                                        <div className={`p-2 rounded-xl ${i === 0 ? 'bg-rodez-red text-white' : 'bg-gray-900 text-gray-500'}`}><Calendar className="w-5 h-5" /></div>
+                                        <div className="flex flex-col">
+                                            <span className={`text-sm font-bold ${i === 0 ? 'text-rodez-red' : 'text-gray-100'}`}>{rem.text}</span>
+                                            <span className="text-[10px] text-gray-500 font-bold uppercase">{rem.day} de {['Enero', 'Febrero', 'Marzo', 'Abril', 'Mayo', 'Junio', 'Julio', 'Agosto', 'Septiembre', 'Octubre', 'Noviembre', 'Diciembre'][rem.month]}</span>
+                                        </div>
+                                    </div>
+                                    <button onClick={(e) => { e.stopPropagation(); deleteAnnualReminder(rem.id); }} className="p-2 hover:bg-red-500/20 text-gray-600 hover:text-red-500 rounded-xl transition-all"><Trash2 className="w-4 h-4" /></button>
+                                </div>
+                            ))}
+                            {sortedAnnualReminders.length === 0 && <div className="text-center py-10 text-gray-600 italic text-sm">No hay recordatorios configurados</div>}
+                        </div>
+                        <button onClick={() => { setShowAllAnnuals(false); setIsAddingAnnual(true); }} className="w-full bg-rodez-red/10 border border-rodez-red/20 py-4 rounded-2xl font-black text-xs text-rodez-red hover:bg-rodez-red hover:text-white transition-all transition-all uppercase tracking-widest flex-shrink-0 flex items-center justify-center gap-2"><Plus className="w-4 h-4" /> AGREGAR NUEVO EVENTO</button>
+                    </div>
+                </div>
+            )}
 
             {/* MODAL: Annual Reminder Creator */}
             {isAddingAnnual && (
