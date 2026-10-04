@@ -376,32 +376,6 @@ export const BudgetView: React.FC<BudgetViewProps> = () => {
     return (
         <div className="h-full overflow-y-auto bg-gray-950 p-4 md:p-6">
             <div className="max-w-7xl mx-auto space-y-6">
-                {/* Header */}
-                <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
-                    <div>
-                        <h1 className="text-3xl font-bold text-white">Presupuesto</h1>
-                        <p className="text-gray-400 mt-1">Gestión de finanzas personales</p>
-                    </div>
-                    <div className="flex space-x-3 w-full md:w-auto">
-                        {activeTab === 'ACCOUNTS' && (
-                            <button
-                                onClick={() => {
-                                    setModalInitialBucket(undefined);
-                                    setModalLockedBucket(false);
-                                    setModalInitialAccountId(undefined);
-                                    setModalInitialType(undefined);
-                                    setModalAllowedTypes(undefined);
-                                    setShowAddTransaction(true);
-                                }}
-                                className="px-4 py-2 bg-rodez-red hover:bg-blue-600 text-white rounded-lg flex items-center justify-center space-x-2 transition-colors w-full md:w-auto"
-                                disabled={accounts.length === 0}
-                            >
-                                <Plus className="w-4 h-4" />
-                                <span>Nueva Transacción</span>
-                            </button>
-                        )}
-                    </div>
-                </div>
 
                 {/* Tabs */}
                 <div className="flex space-x-1 bg-gray-900 p-1 rounded-lg w-full md:w-fit overflow-x-auto">

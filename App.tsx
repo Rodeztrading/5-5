@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import { BudgetView } from './components/BudgetView';
 import { LoginScreen } from './components/LoginScreen';
 import { LoadingScreen } from './components/LoadingScreen';
-import { Settings, Wallet, LogOut, User, Download, Smartphone, Share } from 'lucide-react';
+import { Settings, LogOut, User, Download, Smartphone, Share } from 'lucide-react';
 import { resetBudgetData } from './services/budgetService';
 import { useAuth } from './hooks/useAuth';
 import { usePWAInstall } from './hooks/usePWAInstall';
@@ -33,32 +33,18 @@ const App: React.FC = () => {
 
           {/* Logo 5-5 Finanzas */}
           <div className="h-full flex items-center mr-6 md:mr-10">
-            <div className="flex items-center space-x-2.5 cursor-pointer" onClick={() => setView('BUDGET')}>
-              <div className="w-9 h-9 md:w-10 md:h-10 rounded-xl bg-gradient-to-br from-red-600 to-red-800 flex items-center justify-center font-black text-white text-sm md:text-base tracking-tight shadow-md shadow-red-900/40 border border-red-500/40">
-                5-5
-              </div>
-              <div className="flex flex-col">
-                <span className="text-sm md:text-base font-black tracking-tight text-white leading-none">
-                  5-5 <span className="text-rodez-red">FINANZAS</span>
-                </span>
-                <span className="text-[9px] md:text-[10px] text-gray-400 font-semibold tracking-wider uppercase leading-tight mt-0.5">
-                  Control de Presupuesto
-                </span>
-              </div>
+            <div className="flex flex-col cursor-pointer" onClick={() => setView('BUDGET')}>
+              <span className="text-sm md:text-base font-black tracking-tight text-white leading-none">
+                5-5 <span className="text-rodez-red">FINANZAS</span>
+              </span>
+              <span className="text-[9px] md:text-[10px] text-gray-400 font-semibold tracking-wider uppercase leading-tight mt-0.5">
+                Control de Presupuesto
+              </span>
             </div>
           </div>
 
           {/* Navigation Links */}
           <div className="flex items-center space-x-1 md:space-x-2">
-            <button
-              onClick={() => setView('BUDGET')}
-              className={`flex items-center justify-center px-3 py-2 md:px-4 md:py-2.5 rounded-lg transition-all ${view === 'BUDGET' ? 'bg-gray-800 text-rodez-red shadow-inner' : 'text-gray-400 hover:text-white hover:bg-gray-800/50'}`}
-              title="Presupuesto"
-            >
-              <Wallet className="w-5 h-5 md:mr-2" />
-              <span className="hidden md:block font-medium">Presupuesto</span>
-            </button>
-
             <button
               onClick={() => setView('SETTINGS')}
               className={`flex items-center justify-center px-3 py-2 md:px-4 md:py-2.5 rounded-lg transition-all ${view === 'SETTINGS' ? 'bg-gray-800 text-white' : 'text-gray-400 hover:text-white hover:bg-gray-800/50'}`}
