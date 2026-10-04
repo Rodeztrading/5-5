@@ -50,6 +50,8 @@ export const BudgetView: React.FC<BudgetViewProps> = () => {
     const [loading, setLoading] = useState(true);
     const [showAddAccount, setShowAddAccount] = useState(false);
     const [showAddTransaction, setShowAddTransaction] = useState(false);
+    const [modalInitialBucket, setModalInitialBucket] = useState<BudgetBucket | undefined>(undefined);
+    const [modalLockedBucket, setModalLockedBucket] = useState(false);
     const [showMonthlyModal, setShowMonthlyModal] = useState(false);
     const [monthlyModalType, setMonthlyModalType] = useState<TransactionType>(TransactionType.INCOME);
     const [selectedBucket, setSelectedBucket] = useState<BudgetBucket | null>(null);
@@ -183,25 +185,41 @@ export const BudgetView: React.FC<BudgetViewProps> = () => {
                             <div
                                 key={bucket.id}
                                 onClick={() => {
-                                    setSelectedBucket(bucket.id);
-                                    if (bucket.id === BudgetBucket.INVESTMENT) {
-                                        setShowInvestmentModal(true);
-                                    } else {
-                                        setShowBucketDetailModal(true);
-                                    }
+                                    setModalInitialBucket(bucket.id);
+                                    setModalLockedBucket(true);
+                                    setShowAddTransaction(true);
                                 }}
-                                className={`bg-gradient-to-br ${bucket.color} border rounded-xl p-4 md:p-5 transition-all hover:scale-[1.02] cursor-pointer hover:border-white/20`}
+                                className={`bg-gradient-to-br ${bucket.color} border rounded-xl p-4 md:p-5 transition-all hover:scale-[1.02] cursor-pointer hover:border-white/30 group relative shadow-lg`}
                             >
                                 <div className="flex items-center justify-between mb-3 text-white/70">
                                     <span className="text-xs font-bold uppercase tracking-wider">{bucket.label} ({bucket.pct}%)</span>
                                     {bucket.icon}
                                 </div>
-                                <div className="text-2xl font-bold text-white mb-1">
+                                <div className="text-2xl font-bold text-white mb-2">
                                     ${balance.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}
                                 </div>
-                                <div className="text-[10px] text-white/40 flex items-center">
-                                    <List className="w-3 h-3 mr-1" />
-                                    Gestionado por cubeta
+                                <div className="flex items-center justify-between pt-2 border-t border-white/10 text-[11px]">
+                                    <span className="text-white font-medium flex items-center group-hover:underline">
+                                        <Plus className="w-3.5 h-3.5 mr-1 text-white" />
+                                        Registrar Gasto
+                                    </span>
+                                    <button
+                                        type="button"
+                                        onClick={(e) => {
+                                            e.stopPropagation();
+                                            setSelectedBucket(bucket.id);
+                                            if (bucket.id === BudgetBucket.INVESTMENT) {
+                                                setShowInvestmentModal(true);
+                                            } else {
+                                                setShowBucketDetailModal(true);
+                                            }
+                                        }}
+                                        className="text-white/60 hover:text-white flex items-center hover:underline transition-colors px-1 py-0.5 rounded"
+                                        title="Ver historial de movimientos"
+                                    >
+                                        <List className="w-3.5 h-3.5 mr-1" />
+                                        Historial
+                                    </button>
                                 </div>
                             </div>
                         );
@@ -349,7 +367,11 @@ export const BudgetView: React.FC<BudgetViewProps> = () => {
                     <div className="flex space-x-3 w-full md:w-auto">
                         {activeTab === 'ACCOUNTS' && (
                             <button
-                                onClick={() => setShowAddTransaction(true)}
+                                onClick={() => {
+                                    setModalInitialBucket(undefined);
+                                    setModalLockedBucket(false);
+                                    setShowAddTransaction(true);
+                                }}
                                 className="px-4 py-2 bg-rodez-red hover:bg-blue-600 text-white rounded-lg flex items-center justify-center space-x-2 transition-colors w-full md:w-auto"
                                 disabled={accounts.length === 0}
                             >
@@ -407,8 +429,14 @@ export const BudgetView: React.FC<BudgetViewProps> = () => {
             {showAddTransaction && (
                 <AddTransactionModal
                     accounts={accounts}
-                    onClose={() => setShowAddTransaction(false)}
+                    onClose={() => {
+                        setShowAddTransaction(false);
+                        setModalInitialBucket(undefined);
+                        setModalLockedBucket(false);
+                    }}
                     onSave={handleAddTransaction}
+                    initialBucket={modalInitialBucket}
+                    lockedBucket={modalLockedBucket}
                     existingInvestments={Array.from(new Set(transactions
                         .filter(t => t.investmentName)
                         .map(t => t.investmentName as string)

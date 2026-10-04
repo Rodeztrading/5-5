@@ -1,23 +1,67 @@
 import React, { useState, useEffect } from 'react';
-import { X, TrendingUp, TrendingDown, ArrowRightLeft, Calendar, AlertCircle } from 'lucide-react';
+import { X, TrendingUp, TrendingDown, ArrowRightLeft, AlertCircle, Percent } from 'lucide-react';
 import { TransactionType, Transaction, Account, Category, BudgetBucket } from '../types';
-import { getCategories } from '../services/budgetService';
+import { getCategories, getEffectiveCategoryBucket } from '../services/budgetService';
 import { useAuth } from '../hooks/useAuth';
+
+// ── Default income distribution percentages ──
+const DEFAULT_ALLOCATIONS: Record<BudgetBucket, number> = {
+    [BudgetBucket.ESSENTIAL]: 50,
+    [BudgetBucket.INVESTMENT]: 25,
+    [BudgetBucket.STABILITY]: 15,
+    [BudgetBucket.REWARDS]: 10,
+    [BudgetBucket.OTHER]: 0,
+};
+
+const BUCKET_LABELS: Record<BudgetBucket, string> = {
+    [BudgetBucket.ESSENTIAL]: 'Gastos Esenciales',
+    [BudgetBucket.INVESTMENT]: 'Inversión',
+    [BudgetBucket.STABILITY]: 'Fondo de Estabilidad',
+    [BudgetBucket.REWARDS]: 'Recompensas',
+    [BudgetBucket.OTHER]: 'Otro',
+};
+
+const BUCKET_COLORS: Record<BudgetBucket, string> = {
+    [BudgetBucket.ESSENTIAL]: 'border-blue-500 text-blue-400',
+    [BudgetBucket.INVESTMENT]: 'border-green-500 text-green-400',
+    [BudgetBucket.STABILITY]: 'border-yellow-500 text-yellow-400',
+    [BudgetBucket.REWARDS]: 'border-purple-500 text-purple-400',
+    [BudgetBucket.OTHER]: 'border-gray-500 text-gray-400',
+};
+
+// Active buckets the user can configure (excluding OTHER)
+const ACTIVE_BUCKETS: BudgetBucket[] = [
+    BudgetBucket.ESSENTIAL,
+    BudgetBucket.INVESTMENT,
+    BudgetBucket.STABILITY,
+    BudgetBucket.REWARDS,
+];
 
 interface AddTransactionModalProps {
     accounts: Account[];
     onClose: () => void;
     onSave: (transaction: Omit<Transaction, 'id' | 'createdAt'>) => Promise<void>;
     existingInvestments?: string[];
+    initialBucket?: BudgetBucket;   // Pre-selecciona la cubeta al abrir
+    lockedBucket?: boolean;         // Si es true, oculta el selector de cubeta
 }
 
-export const AddTransactionModal: React.FC<AddTransactionModalProps> = ({ accounts, onClose, onSave, existingInvestments = [] }) => {
+export const AddTransactionModal: React.FC<AddTransactionModalProps> = ({
+    accounts,
+    onClose,
+    onSave,
+    existingInvestments = [],
+    initialBucket,
+    lockedBucket = false,
+}) => {
     const { user } = useAuth();
-    const [type, setType] = useState<TransactionType>(TransactionType.EXPENSE);
+    const [type, setType] = useState<TransactionType>(
+        lockedBucket ? TransactionType.EXPENSE : TransactionType.EXPENSE
+    );
     const [amount, setAmount] = useState('');
     const [description, setDescription] = useState('');
 
-    // Category State
+    // Category State (used only for EXPENSE / TRANSFER)
     const [categories, setCategories] = useState<Category[]>([]);
     const [selectedCategoryId, setSelectedCategoryId] = useState<string>('');
     const [selectedSubcategoryId, setSelectedSubcategoryId] = useState<string>('');
@@ -26,22 +70,33 @@ export const AddTransactionModal: React.FC<AddTransactionModalProps> = ({ accoun
     const [toAccountId, setToAccountId] = useState(accounts.length > 1 ? accounts[1].id : '');
     const [date, setDate] = useState(new Date().toISOString().split('T')[0]);
 
-    // Pending Bills State
+    // Pending Bills State (Expense only)
     const [isPending, setIsPending] = useState(false);
     const [dueDate, setDueDate] = useState('');
-    const [bucketId, setBucketId] = useState<BudgetBucket>(BudgetBucket.ESSENTIAL);
+    const [bucketId, setBucketId] = useState<BudgetBucket>(initialBucket || BudgetBucket.ESSENTIAL);
+
+    // Synchronize if initialBucket or lockedBucket props change
+    useEffect(() => {
+        if (initialBucket) {
+            setBucketId(initialBucket);
+        }
+        if (lockedBucket) {
+            setType(TransactionType.EXPENSE);
+        }
+    }, [initialBucket, lockedBucket]);
 
     // Investment/Asset Tracking State
     const [isInvestmentReturn, setIsInvestmentReturn] = useState(false);
     const [investmentName, setInvestmentName] = useState('');
     const [isNewInvestment, setIsNewInvestment] = useState(false);
 
+    // Income bucket allocations — keyed by BudgetBucket, value = % (0-100)
+    const [allocations, setAllocations] = useState<Record<BudgetBucket, number>>({ ...DEFAULT_ALLOCATIONS });
+
     const [loading, setLoading] = useState(false);
 
     useEffect(() => {
-        if (user) {
-            loadCategories();
-        }
+        if (user) loadCategories();
     }, [user]);
 
     const loadCategories = async () => {
@@ -54,15 +109,61 @@ export const AddTransactionModal: React.FC<AddTransactionModalProps> = ({ accoun
         }
     };
 
-    // Filter categories by transaction type
-    const availableCategories = categories.filter(c => c.type === type);
+    // Filter categories: For expenses, only show categories that belong to this bucket
+    const availableCategories = categories.filter(c => {
+        if (c.type !== type) return false;
+        if (type === TransactionType.EXPENSE) {
+            const catBucket = getEffectiveCategoryBucket(c);
+            return catBucket === bucketId;
+        }
+        return true;
+    });
 
-    // Get selected category object
+    // Auto-select or validate category when bucket or type changes
+    useEffect(() => {
+        if (selectedCategoryId) {
+            const exists = availableCategories.some(c => c.id === selectedCategoryId);
+            if (!exists) {
+                setSelectedCategoryId(availableCategories[0]?.id || '');
+                setSelectedSubcategoryId('');
+            }
+        } else if (availableCategories.length === 1) {
+            setSelectedCategoryId(availableCategories[0].id);
+        }
+    }, [bucketId, type, categories]);
+
     const selectedCategory = categories.find(c => c.id === selectedCategoryId);
 
+    // ── Allocation helpers ──────────────────────────────────────────────────
+    const parsedAmount = parseFloat(amount) || 0;
+    const totalAllocated = ACTIVE_BUCKETS.reduce((s, b) => s + (allocations[b] || 0), 0);
+
+    const handleAllocationChange = (bucket: BudgetBucket, raw: string) => {
+        const val = Math.max(0, Math.min(100, parseFloat(raw) || 0));
+        setAllocations(prev => ({ ...prev, [bucket]: val }));
+    };
+
+    const handleClearBucket = (bucket: BudgetBucket) => {
+        setAllocations(prev => ({ ...prev, [bucket]: 0 }));
+    };
+
+    // Reset allocations when switching away from income
+    useEffect(() => {
+        if (type !== TransactionType.INCOME) {
+            setAllocations({ ...DEFAULT_ALLOCATIONS });
+        }
+    }, [type]);
+
+    // ── Submit ──────────────────────────────────────────────────────────────
     const handleSubmit = async (e: React.FormEvent) => {
         e.preventDefault();
         if (!amount || !description || !accountId) return;
+
+        // For income, validate total doesn't exceed 100%
+        if (type === TransactionType.INCOME && totalAllocated > 100) {
+            alert(`El total de porcentajes es ${totalAllocated}%. Debe ser igual o menor a 100%.`);
+            return;
+        }
 
         try {
             setLoading(true);
@@ -74,15 +175,21 @@ export const AddTransactionModal: React.FC<AddTransactionModalProps> = ({ accoun
                 accountId,
                 toAccountId: type === TransactionType.TRANSFER ? toAccountId : undefined,
                 date: new Date(date).getTime(),
-                categoryId: type !== TransactionType.TRANSFER && selectedCategoryId ? selectedCategoryId : undefined,
-                subcategoryId: type !== TransactionType.TRANSFER && selectedSubcategoryId ? selectedSubcategoryId : undefined,
-                categoryName: selectedCategory?.name, // For legacy/display support
+                categoryId: type === TransactionType.EXPENSE && selectedCategoryId ? selectedCategoryId : undefined,
+                subcategoryId: type === TransactionType.EXPENSE && selectedSubcategoryId ? selectedSubcategoryId : undefined,
+                categoryName: type === TransactionType.EXPENSE ? selectedCategory?.name : undefined,
                 isPending: type === TransactionType.EXPENSE ? isPending : false,
                 dueDate: isPending && dueDate ? new Date(dueDate).getTime() : undefined,
                 isPaid: false,
                 bucketId: type === TransactionType.EXPENSE ? bucketId : (isInvestmentReturn ? BudgetBucket.INVESTMENT : undefined),
                 investmentName: investmentName.trim() || undefined,
-                isInvestmentReturn: type === TransactionType.INCOME ? isInvestmentReturn : false
+                isInvestmentReturn: type === TransactionType.INCOME ? isInvestmentReturn : false,
+                // For income: store the custom % allocation so budgetService can use it instead of hardcoded defaults
+                bucketAllocations: type === TransactionType.INCOME
+                    ? Object.fromEntries(
+                        ACTIVE_BUCKETS.map(b => [b, allocations[b] ?? 0])
+                    ) as Partial<Record<BudgetBucket, number>>
+                    : undefined,
             };
 
             await onSave(transactionData);
@@ -107,30 +214,47 @@ export const AddTransactionModal: React.FC<AddTransactionModalProps> = ({ accoun
 
                 <form onSubmit={handleSubmit} className="p-6 space-y-6">
                     {/* Transaction Type */}
-                    <div className="flex bg-gray-800 p-1 rounded-lg">
-                        {[
-                            { type: TransactionType.INCOME, icon: TrendingUp, label: 'Ingreso', color: 'text-green-400' },
-                            { type: TransactionType.EXPENSE, icon: TrendingDown, label: 'Gasto', color: 'text-red-400' },
-                            { type: TransactionType.TRANSFER, icon: ArrowRightLeft, label: 'Transferencia', color: 'text-blue-400' },
-                        ].map((item) => (
-                            <button
-                                key={item.type}
-                                type="button"
-                                onClick={() => {
-                                    setType(item.type);
-                                    setSelectedCategoryId('');
-                                    setSelectedSubcategoryId('');
-                                }}
-                                className={`flex-1 flex items-center justify-center space-x-2 py-2 rounded-md transition-all ${type === item.type ? 'bg-gray-700 shadow-sm' : 'hover:bg-gray-700/50'
-                                    }`}
-                            >
-                                <item.icon className={`w-4 h-4 ${item.color}`} />
-                                <span className={`text-sm font-medium ${type === item.type ? 'text-white' : 'text-gray-400'}`}>
-                                    {item.label}
-                                </span>
-                            </button>
-                        ))}
-                    </div>
+                    {lockedBucket ? (
+                        <div className="bg-gradient-to-r from-gray-800 to-gray-800/60 border border-gray-700 rounded-xl p-3.5 flex items-center justify-between shadow-inner">
+                            <div className="flex items-center space-x-2.5">
+                                <div className="p-1.5 rounded-lg bg-red-500/20 text-red-400">
+                                    <TrendingDown className="w-4 h-4" />
+                                </div>
+                                <div>
+                                    <span className="text-xs font-semibold text-gray-400 uppercase tracking-wider block">Registrar en</span>
+                                    <span className="text-sm font-bold text-white">{BUCKET_LABELS[bucketId]}</span>
+                                </div>
+                            </div>
+                            <span className="text-xs font-bold uppercase tracking-wider px-2.5 py-1 rounded bg-red-900/30 text-red-300 border border-red-800/40">
+                                Gasto
+                            </span>
+                        </div>
+                    ) : (
+                        <div className="flex bg-gray-800 p-1 rounded-lg">
+                            {[
+                                { type: TransactionType.INCOME, icon: TrendingUp, label: 'Ingreso', color: 'text-green-400' },
+                                { type: TransactionType.EXPENSE, icon: TrendingDown, label: 'Gasto', color: 'text-red-400' },
+                                { type: TransactionType.TRANSFER, icon: ArrowRightLeft, label: 'Transferencia', color: 'text-blue-400' },
+                            ].map((item) => (
+                                <button
+                                    key={item.type}
+                                    type="button"
+                                    onClick={() => {
+                                        setType(item.type);
+                                        setSelectedCategoryId('');
+                                        setSelectedSubcategoryId('');
+                                    }}
+                                    className={`flex-1 flex items-center justify-center space-x-2 py-2 rounded-md transition-all ${type === item.type ? 'bg-gray-700 shadow-sm' : 'hover:bg-gray-700/50'
+                                        }`}
+                                >
+                                    <item.icon className={`w-4 h-4 ${item.color}`} />
+                                    <span className={`text-sm font-medium ${type === item.type ? 'text-white' : 'text-gray-400'}`}>
+                                        {item.label}
+                                    </span>
+                                </button>
+                            ))}
+                        </div>
+                    )}
 
                     {/* Amount */}
                     <div>
@@ -156,168 +280,312 @@ export const AddTransactionModal: React.FC<AddTransactionModalProps> = ({ accoun
                             type="text"
                             value={description}
                             onChange={(e) => setDescription(e.target.value)}
-                            placeholder={type === TransactionType.INCOME ? "Ej. Salario" : "Ej. Supermercado"}
+                            placeholder={type === TransactionType.INCOME ? 'Ej. Salario' : 'Ej. Supermercado'}
                             className="w-full bg-gray-800 border border-gray-700 rounded-lg px-4 py-3 text-white focus:ring-2 focus:ring-rodez-red focus:border-transparent outline-none transition-all"
                             required
                         />
                     </div>
 
-                    {/* Investment Return Checkbox (Only for Income) */}
+                    {/* ══════════════════════════════════════════════════ */}
+                    {/* INCOME-ONLY SECTION */}
+                    {/* ══════════════════════════════════════════════════ */}
                     {type === TransactionType.INCOME && (
-                        <div className="bg-gray-800/50 p-4 rounded-lg border border-gray-700">
-                            <div className="flex items-center space-x-3">
-                                <input
-                                    type="checkbox"
-                                    id="isReturn"
-                                    checked={isInvestmentReturn}
-                                    onChange={(e) => setIsInvestmentReturn(e.target.checked)}
-                                    className="w-5 h-5 rounded border-gray-600 text-green-500 focus:ring-green-500 bg-gray-700"
-                                />
-                                <label htmlFor="isReturn" className="text-sm font-medium text-white flex items-center cursor-pointer">
-                                    <TrendingUp className="w-4 h-4 mr-2 text-green-400" />
-                                    Es Retorno de Inversión
-                                </label>
-                            </div>
-                        </div>
-                    )}
-
-                    {/* Investment Name (For returns OR Investment bucket) */}
-                    {(isInvestmentReturn || (type === TransactionType.EXPENSE && bucketId === BudgetBucket.INVESTMENT)) && (
-                        <div className="animate-in fade-in slide-in-from-top-2 duration-200 space-y-3">
-                            <div>
-                                <label className="block text-sm font-medium text-gray-400 mb-2">Seleccionar Inversión / Activo</label>
-                                <select
-                                    value={isNewInvestment ? 'NEW' : investmentName}
-                                    onChange={(e) => {
-                                        if (e.target.value === 'NEW') {
-                                            setIsNewInvestment(true);
-                                            setInvestmentName('');
-                                        } else {
-                                            setIsNewInvestment(false);
-                                            setInvestmentName(e.target.value);
-                                        }
-                                    }}
-                                    className="w-full bg-gray-800 border border-gray-700 rounded-lg px-4 py-3 text-white focus:ring-2 focus:ring-rodez-red focus:border-transparent outline-none transition-all"
-                                    required
-                                >
-                                    <option value="" disabled>Selecciona una opción</option>
-                                    <option value="NEW">+ Nueva Inversión...</option>
-                                    {existingInvestments.map(inv => (
-                                        <option key={inv} value={inv}>{inv}</option>
-                                    ))}
-                                </select>
-                            </div>
-
-                            {isNewInvestment && (
-                                <div className="animate-in slide-in-from-left-2 duration-200">
-                                    <label className="block text-xs font-medium text-rodez-red uppercase tracking-wider mb-2">Nombre de la Nueva Inversión</label>
+                        <>
+                            {/* Investment Return toggle */}
+                            <div className="bg-gray-800/50 p-4 rounded-lg border border-gray-700">
+                                <div className="flex items-center space-x-3">
                                     <input
-                                        type="text"
-                                        value={investmentName}
-                                        onChange={(e) => setInvestmentName(e.target.value)}
-                                        placeholder="Ej: Trading, Apartamento, Bitcoin"
-                                        className="w-full bg-gray-800 border-2 border-rodez-red/30 rounded-lg px-4 py-3 text-white focus:ring-2 focus:ring-rodez-red focus:border-transparent outline-none transition-all"
-                                        required
+                                        type="checkbox"
+                                        id="isReturn"
+                                        checked={isInvestmentReturn}
+                                        onChange={(e) => setIsInvestmentReturn(e.target.checked)}
+                                        className="w-5 h-5 rounded border-gray-600 text-green-500 focus:ring-green-500 bg-gray-700"
                                     />
+                                    <label htmlFor="isReturn" className="text-sm font-medium text-white flex items-center cursor-pointer">
+                                        <TrendingUp className="w-4 h-4 mr-2 text-green-400" />
+                                        Es Retorno de Inversión
+                                    </label>
+                                </div>
+                            </div>
+
+                            {/* Investment name (when isReturn) */}
+                            {isInvestmentReturn && (
+                                <div className="animate-in fade-in slide-in-from-top-2 duration-200 space-y-3">
+                                    <div>
+                                        <label className="block text-sm font-medium text-gray-400 mb-2">Seleccionar Inversión / Activo</label>
+                                        <select
+                                            value={isNewInvestment ? 'NEW' : investmentName}
+                                            onChange={(e) => {
+                                                if (e.target.value === 'NEW') {
+                                                    setIsNewInvestment(true);
+                                                    setInvestmentName('');
+                                                } else {
+                                                    setIsNewInvestment(false);
+                                                    setInvestmentName(e.target.value);
+                                                }
+                                            }}
+                                            className="w-full bg-gray-800 border border-gray-700 rounded-lg px-4 py-3 text-white focus:ring-2 focus:ring-rodez-red focus:border-transparent outline-none transition-all"
+                                        >
+                                            <option value="" disabled>Selecciona una opción</option>
+                                            <option value="NEW">+ Nueva Inversión...</option>
+                                            {existingInvestments.map(inv => (
+                                                <option key={inv} value={inv}>{inv}</option>
+                                            ))}
+                                        </select>
+                                    </div>
+
+                                    {isNewInvestment && (
+                                        <div className="animate-in slide-in-from-left-2 duration-200">
+                                            <label className="block text-xs font-medium text-rodez-red uppercase tracking-wider mb-2">Nombre de la Nueva Inversión</label>
+                                            <input
+                                                type="text"
+                                                value={investmentName}
+                                                onChange={(e) => setInvestmentName(e.target.value)}
+                                                placeholder="Ej: Trading, Apartamento, Bitcoin"
+                                                className="w-full bg-gray-800 border-2 border-rodez-red/30 rounded-lg px-4 py-3 text-white focus:ring-2 focus:ring-rodez-red focus:border-transparent outline-none transition-all"
+                                            />
+                                        </div>
+                                    )}
                                 </div>
                             )}
-                        </div>
+
+                            {/* ── Bucket Allocation ── */}
+                            <div className="space-y-3">
+                                <div className="flex items-center justify-between">
+                                    <label className="text-sm font-semibold text-white flex items-center gap-2">
+                                        <Percent className="w-4 h-4 text-green-400" />
+                                        Distribución del Ingreso
+                                    </label>
+                                    {/* Total indicator */}
+                                    <span className={`text-xs font-bold px-2 py-1 rounded-full ${totalAllocated > 100
+                                        ? 'bg-red-900/30 text-red-400'
+                                        : totalAllocated === 100
+                                            ? 'bg-green-900/30 text-green-400'
+                                            : 'bg-gray-800 text-gray-400'
+                                        }`}>
+                                        {totalAllocated}% / 100%
+                                    </span>
+                                </div>
+
+                                {ACTIVE_BUCKETS.map(bucket => {
+                                    const pct = allocations[bucket] ?? 0;
+                                    const monetary = parsedAmount > 0 ? (parsedAmount * pct) / 100 : 0;
+                                    const colorClass = BUCKET_COLORS[bucket];
+
+                                    return (
+                                        <div key={bucket} className={`bg-gray-800/60 border rounded-lg p-3 ${colorClass.split(' ')[0]}`}>
+                                            <div className="flex items-center justify-between mb-2">
+                                                <span className={`text-xs font-semibold uppercase tracking-wide ${colorClass.split(' ')[1]}`}>
+                                                    {BUCKET_LABELS[bucket]}
+                                                </span>
+                                                <span className="text-sm font-bold text-white">
+                                                    ${monetary.toFixed(2)}
+                                                </span>
+                                            </div>
+
+                                            <div className="flex items-center gap-2">
+                                                {/* % input */}
+                                                <div className="relative flex-1">
+                                                    <input
+                                                        type="number"
+                                                        value={pct === 0 ? '' : pct}
+                                                        onChange={(e) => handleAllocationChange(bucket, e.target.value)}
+                                                        onBlur={(e) => {
+                                                            if (e.target.value === '') setAllocations(prev => ({ ...prev, [bucket]: 0 }));
+                                                        }}
+                                                        placeholder="0"
+                                                        min="0"
+                                                        max="100"
+                                                        step="1"
+                                                        className="w-full bg-gray-900 border border-gray-700 rounded-lg px-3 py-2 pr-8 text-white text-sm focus:ring-2 focus:ring-rodez-red focus:border-transparent outline-none transition-all"
+                                                    />
+                                                    <span className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 text-xs">%</span>
+                                                </div>
+
+                                                {/* Clear button */}
+                                                <button
+                                                    type="button"
+                                                    onClick={() => handleClearBucket(bucket)}
+                                                    className="p-2 rounded-lg bg-gray-900 text-gray-500 hover:text-red-400 hover:bg-red-900/20 transition-colors"
+                                                    title="Poner en 0%"
+                                                >
+                                                    <X className="w-3.5 h-3.5" />
+                                                </button>
+                                            </div>
+
+                                            {/* Mini progress bar */}
+                                            {pct > 0 && (
+                                                <div className="mt-2 h-1 bg-gray-700 rounded-full overflow-hidden">
+                                                    <div
+                                                        className={`h-full rounded-full transition-all ${bucket === BudgetBucket.ESSENTIAL ? 'bg-blue-500'
+                                                            : bucket === BudgetBucket.INVESTMENT ? 'bg-green-500'
+                                                                : bucket === BudgetBucket.STABILITY ? 'bg-yellow-500'
+                                                                    : 'bg-purple-500'
+                                                            }`}
+                                                        style={{ width: `${Math.min(pct, 100)}%` }}
+                                                    />
+                                                </div>
+                                            )}
+                                        </div>
+                                    );
+                                })}
+
+                                {/* Remaining unallocated */}
+                                {totalAllocated < 100 && (
+                                    <p className="text-xs text-gray-500 text-center">
+                                        {(100 - totalAllocated)}% sin asignar — ese monto no afectará ninguna cubeta.
+                                    </p>
+                                )}
+                                {totalAllocated > 100 && (
+                                    <p className="text-xs text-red-400 text-center font-medium">
+                                        ⚠ El total supera 100%. Ajusta los porcentajes antes de guardar.
+                                    </p>
+                                )}
+                            </div>
+                        </>
                     )}
 
-                    {/* Category Selection (Not for Transfer) */}
-                    {type !== TransactionType.TRANSFER && (
-                        <div className="grid grid-cols-2 gap-4">
-                            <div>
-                                <label className="block text-sm font-medium text-gray-400 mb-2">Categoría (Opcional)</label>
-                                <select
-                                    value={selectedCategoryId}
-                                    onChange={(e) => {
-                                        setSelectedCategoryId(e.target.value);
-                                        setSelectedSubcategoryId('');
-                                    }}
-                                    className="w-full bg-gray-800 border border-gray-700 rounded-lg px-4 py-3 text-white focus:ring-2 focus:ring-rodez-red focus:border-transparent outline-none transition-all"
-                                >
-                                    <option value="">Sin categoría</option>
-                                    {availableCategories.map((cat) => (
-                                        <option key={cat.id} value={cat.id}>{cat.name}</option>
-                                    ))}
-                                </select>
-                            </div>
-
-                            <div>
-                                <label className="block text-sm font-medium text-gray-400 mb-2">Subcategoría</label>
-                                <select
-                                    value={selectedSubcategoryId}
-                                    onChange={(e) => setSelectedSubcategoryId(e.target.value)}
-                                    className="w-full bg-gray-800 border border-gray-700 rounded-lg px-4 py-3 text-white focus:ring-2 focus:ring-rodez-red focus:border-transparent outline-none transition-all"
-                                    disabled={!selectedCategoryId || !selectedCategory?.subcategories?.length}
-                                >
-                                    <option value="">Opcional</option>
-                                    {selectedCategory?.subcategories?.map((sub) => (
-                                        <option key={sub.id} value={sub.id}>{sub.name}</option>
-                                    ))}
-                                </select>
-                            </div>
-                        </div>
-                    )}
-
-                    {/* Bucket Selection (Only for Expense) */}
+                    {/* ══════════════════════════════════════════════════ */}
+                    {/* EXPENSE-ONLY SECTION */}
+                    {/* ══════════════════════════════════════════════════ */}
                     {type === TransactionType.EXPENSE && (
-                        <div>
-                            <label className="block text-sm font-medium text-gray-400 mb-2">Distribución (Cubeta)</label>
-                            <div className="grid grid-cols-2 gap-2">
-                                {[
-                                    { id: BudgetBucket.ESSENTIAL, label: 'Esencial (50%)' },
-                                    { id: BudgetBucket.INVESTMENT, label: 'Inversión (25%)' },
-                                    { id: BudgetBucket.STABILITY, label: 'Estabilidad (15%)' },
-                                    { id: BudgetBucket.REWARDS, label: 'Recompensas (10%)' },
-                                ].map((b) => (
-                                    <button
-                                        key={b.id}
-                                        type="button"
-                                        onClick={() => setBucketId(b.id)}
-                                        className={`px-3 py-2 rounded-lg border text-xs font-medium transition-all ${bucketId === b.id
-                                            ? 'bg-rodez-red border-rodez-red text-white'
-                                            : 'bg-gray-800 border-gray-700 text-gray-400 hover:border-gray-600'
-                                            }`}
-                                    >
-                                        {b.label}
-                                    </button>
-                                ))}
-                            </div>
-                        </div>
-                    )}
+                        <>
+                            {/* Investment Name (for Investment bucket) */}
+                            {bucketId === BudgetBucket.INVESTMENT && (
+                                <div className="animate-in fade-in slide-in-from-top-2 duration-200 space-y-3">
+                                    <div>
+                                        <label className="block text-sm font-medium text-gray-400 mb-2">Seleccionar Inversión / Activo</label>
+                                        <select
+                                            value={isNewInvestment ? 'NEW' : investmentName}
+                                            onChange={(e) => {
+                                                if (e.target.value === 'NEW') {
+                                                    setIsNewInvestment(true);
+                                                    setInvestmentName('');
+                                                } else {
+                                                    setIsNewInvestment(false);
+                                                    setInvestmentName(e.target.value);
+                                                }
+                                            }}
+                                            className="w-full bg-gray-800 border border-gray-700 rounded-lg px-4 py-3 text-white focus:ring-2 focus:ring-rodez-red focus:border-transparent outline-none transition-all"
+                                        >
+                                            <option value="" disabled>Selecciona una opción</option>
+                                            <option value="NEW">+ Nueva Inversión...</option>
+                                            {existingInvestments.map(inv => (
+                                                <option key={inv} value={inv}>{inv}</option>
+                                            ))}
+                                        </select>
+                                    </div>
+                                    {isNewInvestment && (
+                                        <div className="animate-in slide-in-from-left-2 duration-200">
+                                            <label className="block text-xs font-medium text-rodez-red uppercase tracking-wider mb-2">Nombre de la Nueva Inversión</label>
+                                            <input
+                                                type="text"
+                                                value={investmentName}
+                                                onChange={(e) => setInvestmentName(e.target.value)}
+                                                placeholder="Ej: Trading, Apartamento, Bitcoin"
+                                                className="w-full bg-gray-800 border-2 border-rodez-red/30 rounded-lg px-4 py-3 text-white focus:ring-2 focus:ring-rodez-red focus:border-transparent outline-none transition-all"
+                                            />
+                                        </div>
+                                    )}
+                                </div>
+                            )}
 
-                    {/* Pending Bill Option (Only for Expense) */}
-                    {type === TransactionType.EXPENSE && (
-                        <div className="bg-gray-800/50 p-4 rounded-lg border border-gray-700">
-                            <div className="flex items-center space-x-3 mb-3">
-                                <input
-                                    type="checkbox"
-                                    id="isPending"
-                                    checked={isPending}
-                                    onChange={(e) => setIsPending(e.target.checked)}
-                                    className="w-5 h-5 rounded border-gray-600 text-rodez-red focus:ring-rodez-red bg-gray-700"
-                                />
-                                <label htmlFor="isPending" className="text-sm font-medium text-white flex items-center cursor-pointer">
-                                    <AlertCircle className="w-4 h-4 mr-2 text-yellow-500" />
-                                    Pendiente de Pago (Factura)
-                                </label>
-                            </div>
-
-                            {isPending && (
+                            {/* Category Selection */}
+                            <div className="grid grid-cols-2 gap-4">
                                 <div>
-                                    <label className="block text-xs text-gray-400 mb-1">Fecha de Vencimiento</label>
-                                    <input
-                                        type="date"
-                                        value={dueDate}
-                                        onChange={(e) => setDueDate(e.target.value)}
-                                        className="w-full bg-gray-800 border border-gray-600 rounded px-3 py-2 text-sm text-white focus:outline-none focus:border-rodez-red"
-                                        required={isPending}
-                                    />
+                                    <label className="block text-sm font-medium text-gray-400 mb-2">Categoría (Opcional)</label>
+                                    <select
+                                        value={selectedCategoryId}
+                                        onChange={(e) => {
+                                            setSelectedCategoryId(e.target.value);
+                                            setSelectedSubcategoryId('');
+                                        }}
+                                        className="w-full bg-gray-800 border border-gray-700 rounded-lg px-4 py-3 text-white focus:ring-2 focus:ring-rodez-red focus:border-transparent outline-none transition-all"
+                                    >
+                                        <option value="">Sin categoría</option>
+                                        {availableCategories.map((cat) => (
+                                            <option key={cat.id} value={cat.id}>{cat.name}</option>
+                                        ))}
+                                    </select>
+                                </div>
+
+                                <div>
+                                    <label className="block text-sm font-medium text-gray-400 mb-2">Subcategoría</label>
+                                    <select
+                                        value={selectedSubcategoryId}
+                                        onChange={(e) => setSelectedSubcategoryId(e.target.value)}
+                                        className="w-full bg-gray-800 border border-gray-700 rounded-lg px-4 py-3 text-white focus:ring-2 focus:ring-rodez-red focus:border-transparent outline-none transition-all"
+                                        disabled={!selectedCategoryId || !selectedCategory?.subcategories?.length}
+                                    >
+                                        <option value="">Opcional</option>
+                                        {selectedCategory?.subcategories?.map((sub) => (
+                                            <option key={sub.id} value={sub.id}>{sub.name}</option>
+                                        ))}
+                                    </select>
+                                </div>
+                            </div>
+
+                            {/* Bucket Selection (only visible if not locked) */}
+                            {!lockedBucket && (
+                                <div>
+                                    <label className="block text-sm font-medium text-gray-400 mb-2">Distribución (Cubeta)</label>
+                                    <div className="grid grid-cols-2 gap-2">
+                                        {[
+                                            { id: BudgetBucket.ESSENTIAL, label: 'Esencial (50%)' },
+                                            { id: BudgetBucket.INVESTMENT, label: 'Inversión (25%)' },
+                                            { id: BudgetBucket.STABILITY, label: 'Estabilidad (15%)' },
+                                            { id: BudgetBucket.REWARDS, label: 'Recompensas (10%)' },
+                                        ].map((b) => (
+                                            <button
+                                                key={b.id}
+                                                type="button"
+                                                onClick={() => {
+                                                    setBucketId(b.id);
+                                                    setSelectedCategoryId('');
+                                                    setSelectedSubcategoryId('');
+                                                }}
+                                                className={`px-3 py-2 rounded-lg border text-xs font-medium transition-all ${bucketId === b.id
+                                                    ? 'bg-rodez-red border-rodez-red text-white'
+                                                    : 'bg-gray-800 border-gray-700 text-gray-400 hover:border-gray-600'
+                                                    }`}
+                                            >
+                                                {b.label}
+                                            </button>
+                                        ))}
+                                    </div>
                                 </div>
                             )}
-                        </div>
+
+                            {/* Pending Bill Option */}
+                            <div className="bg-gray-800/50 p-4 rounded-lg border border-gray-700">
+                                <div className="flex items-center space-x-3 mb-3">
+                                    <input
+                                        type="checkbox"
+                                        id="isPending"
+                                        checked={isPending}
+                                        onChange={(e) => setIsPending(e.target.checked)}
+                                        className="w-5 h-5 rounded border-gray-600 text-rodez-red focus:ring-rodez-red bg-gray-700"
+                                    />
+                                    <label htmlFor="isPending" className="text-sm font-medium text-white flex items-center cursor-pointer">
+                                        <AlertCircle className="w-4 h-4 mr-2 text-yellow-500" />
+                                        Pendiente de Pago (Factura)
+                                    </label>
+                                </div>
+
+                                {isPending && (
+                                    <div>
+                                        <label className="block text-xs text-gray-400 mb-1">Fecha de Vencimiento</label>
+                                        <input
+                                            type="date"
+                                            value={dueDate}
+                                            onChange={(e) => setDueDate(e.target.value)}
+                                            className="w-full bg-gray-800 border border-gray-600 rounded px-3 py-2 text-sm text-white focus:outline-none focus:border-rodez-red"
+                                            required={isPending}
+                                        />
+                                    </div>
+                                )}
+                            </div>
+                        </>
                     )}
 
                     {/* Accounts */}
@@ -378,8 +646,8 @@ export const AddTransactionModal: React.FC<AddTransactionModalProps> = ({ accoun
                         </button>
                         <button
                             type="submit"
-                            disabled={loading}
-                            className={`flex-1 px-4 py-3 text-white rounded-lg transition-colors font-medium flex items-center justify-center ${type === TransactionType.INCOME ? 'bg-green-600 hover:bg-green-700' :
+                            disabled={loading || (type === TransactionType.INCOME && totalAllocated > 100)}
+                            className={`flex-1 px-4 py-3 text-white rounded-lg transition-colors font-medium flex items-center justify-center disabled:opacity-50 disabled:cursor-not-allowed ${type === TransactionType.INCOME ? 'bg-green-600 hover:bg-green-700' :
                                 type === TransactionType.EXPENSE ? 'bg-red-600 hover:bg-red-700' :
                                     'bg-blue-600 hover:bg-blue-700'
                                 }`}

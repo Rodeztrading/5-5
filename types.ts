@@ -102,6 +102,7 @@ export interface Category {
   color?: string;
   icon?: string;
   isDefault?: boolean;
+  bucketId?: BudgetBucket; // Cubeta a la que pertenece esta categoría
 }
 
 export enum BudgetBucket {
@@ -131,6 +132,8 @@ export interface Transaction {
   bucketId?: BudgetBucket; // Cubeta asignada (50/25/15/10)
   investmentName?: string; // Nombre del activo/inversión (ej. "Trading", "Apartamento")
   isInvestmentReturn?: boolean; // Si es un ingreso por retorno de inversión
+  // Custom % allocation for income transactions (overrides the default 50/25/15/10 split)
+  bucketAllocations?: Partial<Record<BudgetBucket, number>>; // percentage 0-100 per bucket
 }
 
 export interface RecurringDebt {
@@ -217,4 +220,23 @@ export interface CustodyDay {
   isToday: boolean;
   isCurrentMonth: boolean;
   checklist?: ChecklistItem[];
+}
+
+// ============================================
+// STORYBOARD / TRADING PLAYBOOK TYPES
+// ============================================
+
+export interface StoryboardItem {
+  id: string;
+  title: string;
+  category: string; // e.g. 'Reversión', 'Continuación', 'Rompimiento', 'Soporte/Resistencia', 'Patrón Vela', etc.
+  imageUrl: string; // URL from Firebase or base64 data URI
+  imageBase64?: string; // Offline fallback base64
+  rules?: string; // Rules/checklist: e.g. "Esperar mecha de rechazo en zona clave"
+  timeframe?: string; // e.g. '1M', '5M', '15M'
+  asset?: string; // e.g. 'EUR/USD', 'OTC', 'General'
+  isPinned?: boolean; // Pinned for today's session
+  tags?: string[];
+  createdAt: number;
+  updatedAt?: number;
 }

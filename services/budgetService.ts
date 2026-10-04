@@ -57,6 +57,7 @@ export const initializeDefaultCategories = async (userId: string): Promise<void>
             icon: 'TrendingUp',
             color: '#4CAF50',
             isDefault: true,
+            bucketId: BudgetBucket.INVESTMENT,
             subcategories: [
                 { id: 'trading', name: 'Trading', isDefault: true },
                 { id: 'wink', name: 'Wink', isDefault: true },
@@ -69,21 +70,36 @@ export const initializeDefaultCategories = async (userId: string): Promise<void>
             icon: 'ShoppingCart',
             color: '#FFC107',
             isDefault: true,
+            bucketId: BudgetBucket.ESSENTIAL,
             subcategories: [
                 { id: 'comida', name: 'Comida', isDefault: true },
                 { id: 'transporte', name: 'Transporte', isDefault: true },
-                { id: 'ocio', name: 'Ocio', isDefault: true },
+                { id: 'supermercado', name: 'Supermercado', isDefault: true },
             ]
         },
         {
-            name: 'Ahorro',
-            type: TransactionType.EXPENSE, // Treated as expense from cash flow perspective, but goes to savings account usually
+            name: 'Fondo de Estabilidad',
+            type: TransactionType.EXPENSE,
             icon: 'PiggyBank',
-            color: '#2196F3',
+            color: '#9C27B0',
             isDefault: true,
+            bucketId: BudgetBucket.STABILITY,
             subcategories: [
                 { id: 'general', name: 'General', isDefault: true },
                 { id: 'emergencia', name: 'Fondo de Emergencia', isDefault: true },
+            ]
+        },
+        {
+            name: 'Recompensas',
+            type: TransactionType.EXPENSE,
+            icon: 'Smile',
+            color: '#E91E63',
+            isDefault: true,
+            bucketId: BudgetBucket.REWARDS,
+            subcategories: [
+                { id: 'gustos', name: 'Gustos Personales', isDefault: true },
+                { id: 'viajes', name: 'Viajes / Salidas', isDefault: true },
+                { id: 'ocio', name: 'Ocio / Entretenimiento', isDefault: true },
             ]
         },
         {
@@ -106,6 +122,15 @@ export const initializeDefaultCategories = async (userId: string): Promise<void>
     });
 
     await batch.commit();
+};
+
+export const getEffectiveCategoryBucket = (category: Category): BudgetBucket => {
+    if (category.bucketId) return category.bucketId;
+    const name = (category.name || '').toLowerCase();
+    if (name.includes('invers')) return BudgetBucket.INVESTMENT;
+    if (name.includes('ahorro') || name.includes('estabilidad') || name.includes('emergencia')) return BudgetBucket.STABILITY;
+    if (name.includes('recompensa') || name.includes('ocio') || name.includes('gusto')) return BudgetBucket.REWARDS;
+    return BudgetBucket.ESSENTIAL;
 };
 
 export const getCategories = async (userId: string): Promise<Category[]> => {
@@ -257,6 +282,7 @@ export const createTransaction = async (
         if (transaction.bucketId) cleanTransaction.bucketId = transaction.bucketId;
         if (transaction.investmentName) cleanTransaction.investmentName = transaction.investmentName;
         if (transaction.isInvestmentReturn !== undefined) cleanTransaction.isInvestmentReturn = transaction.isInvestmentReturn;
+        if (transaction.bucketAllocations) cleanTransaction.bucketAllocations = transaction.bucketAllocations;
 
         const docRef = await addDoc(collection(db, `users/${userId}/transactions`), cleanTransaction);
 
@@ -498,13 +524,20 @@ export const getFinancialSummary = async (userId: string, month?: string): Promi
                     // Cumulative always
                     bucketBalances[BudgetBucket.INVESTMENT] += t.amount;
                 } else {
-                    // Essential only for current month
-                    if (isTargetMonth) bucketBalances[BudgetBucket.ESSENTIAL] += t.amount * 0.50;
+                    // Use custom allocations if set, otherwise fallback to default 50/25/15/10
+                    const alloc = t.bucketAllocations;
+                    const essentialPct  = alloc ? ((alloc[BudgetBucket.ESSENTIAL]  ?? 0) / 100) : 0.50;
+                    const investPct     = alloc ? ((alloc[BudgetBucket.INVESTMENT]  ?? 0) / 100) : 0.25;
+                    const stabilityPct  = alloc ? ((alloc[BudgetBucket.STABILITY]   ?? 0) / 100) : 0.15;
+                    const rewardsPct    = alloc ? ((alloc[BudgetBucket.REWARDS]     ?? 0) / 100) : 0.10;
 
-                    // The rest are cumulative
-                    bucketBalances[BudgetBucket.INVESTMENT] += t.amount * 0.25;
-                    bucketBalances[BudgetBucket.STABILITY] += t.amount * 0.15;
-                    bucketBalances[BudgetBucket.REWARDS] += t.amount * 0.10;
+                    // Essential is monthly (only current month)
+                    if (isTargetMonth) bucketBalances[BudgetBucket.ESSENTIAL] += t.amount * essentialPct;
+
+                    // The rest accumulate cumulatively
+                    bucketBalances[BudgetBucket.INVESTMENT] += t.amount * investPct;
+                    bucketBalances[BudgetBucket.STABILITY]  += t.amount * stabilityPct;
+                    bucketBalances[BudgetBucket.REWARDS]    += t.amount * rewardsPct;
                 }
             } else if (t.type === TransactionType.EXPENSE) {
                 const bId = t.bucketId || BudgetBucket.ESSENTIAL;
