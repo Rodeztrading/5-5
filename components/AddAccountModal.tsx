@@ -10,21 +10,20 @@ interface AddAccountModalProps {
 export const AddAccountModal: React.FC<AddAccountModalProps> = ({ onClose, onSave }) => {
     const [name, setName] = useState('');
     const [type, setType] = useState<AccountType>(AccountType.CASH);
-    const [balance, setBalance] = useState('');
-    const [currency, setCurrency] = useState('USD');
+    const [currency, setCurrency] = useState('COP');
     const [color, setColor] = useState('bg-blue-600');
     const [loading, setLoading] = useState(false);
 
     const handleSubmit = async (e: React.FormEvent) => {
         e.preventDefault();
-        if (!name || !balance) return;
+        if (!name) return;
 
         try {
             setLoading(true);
             await onSave({
                 name,
                 type,
-                balance: parseFloat(balance),
+                balance: 0,
                 currency,
                 color,
             });
@@ -88,33 +87,19 @@ export const AddAccountModal: React.FC<AddAccountModalProps> = ({ onClose, onSav
                         />
                     </div>
 
-                    {/* Balance & Currency */}
-                    <div className="grid grid-cols-2 gap-4">
-                        <div>
-                            <label className="block text-sm font-medium text-gray-400 mb-2">Balance Inicial</label>
-                            <input
-                                type="number"
-                                value={balance}
-                                onChange={(e) => setBalance(e.target.value)}
-                                placeholder="0.00"
-                                step="0.01"
-                                className="w-full bg-gray-800 border border-gray-700 rounded-lg px-4 py-3 text-white focus:ring-2 focus:ring-rodez-red focus:border-transparent outline-none transition-all"
-                                required
-                            />
-                        </div>
-                        <div>
-                            <label className="block text-sm font-medium text-gray-400 mb-2">Moneda</label>
-                            <select
-                                value={currency}
-                                onChange={(e) => setCurrency(e.target.value)}
-                                className="w-full bg-gray-800 border border-gray-700 rounded-lg px-4 py-3 text-white focus:ring-2 focus:ring-rodez-red focus:border-transparent outline-none transition-all"
-                            >
-                                <option value="USD">USD ($)</option>
-                                <option value="EUR">EUR (€)</option>
-                                <option value="COP">COP ($)</option>
-                                <option value="MXN">MXN ($)</option>
-                            </select>
-                        </div>
+                    {/* Currency */}
+                    <div>
+                        <label className="block text-sm font-medium text-gray-400 mb-2">Moneda</label>
+                        <select
+                            value={currency}
+                            onChange={(e) => setCurrency(e.target.value)}
+                            className="w-full bg-gray-800 border border-gray-700 rounded-lg px-4 py-3 text-white focus:ring-2 focus:ring-rodez-red focus:border-transparent outline-none transition-all"
+                        >
+                            <option value="COP">COP ($)</option>
+                            <option value="USD">USD ($)</option>
+                            <option value="EUR">EUR (€)</option>
+                            <option value="MXN">MXN ($)</option>
+                        </select>
                     </div>
 
                     {/* Color Selection */}
