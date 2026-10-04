@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import { BudgetView } from './components/BudgetView';
 import { LoginScreen } from './components/LoginScreen';
 import { LoadingScreen } from './components/LoadingScreen';
-import { Settings, LogOut, User, Download, Smartphone, Share } from 'lucide-react';
+import { Settings, LogOut, User, Download, Smartphone, Share, Trash2 } from 'lucide-react';
 import { resetBudgetData } from './services/budgetService';
 import { useAuth } from './hooks/useAuth';
 import { usePWAInstall } from './hooks/usePWAInstall';
@@ -156,7 +156,7 @@ const App: React.FC = () => {
                   }}
                   className="w-full sm:w-auto px-4 py-2 bg-orange-900/20 text-orange-400 rounded hover:bg-orange-900/40 border border-orange-900/50 transition-colors text-sm flex items-center justify-center"
                 >
-                  <Wallet className="w-4 h-4 mr-2" />
+                  <Trash2 className="w-4 h-4 mr-2" />
                   Reiniciar Datos de Presupuesto
                 </button>
               </div>
@@ -170,7 +170,7 @@ const App: React.FC = () => {
         <div className="fixed inset-0 bg-black/80 flex items-center justify-center z-50 p-4 backdrop-blur-sm">
           <div className="bg-gray-900 border border-gray-800 rounded-xl max-w-md w-full p-6 shadow-2xl">
             <h3 className="text-xl font-bold text-white mb-4 flex items-center">
-              <Wallet className="w-6 h-6 mr-2 text-orange-500" />
+              <Trash2 className="w-6 h-6 mr-2 text-orange-500" />
               ¿Borrar datos de Presupuesto?
             </h3>
             <div className="space-y-4 text-gray-300 text-sm mb-6">
