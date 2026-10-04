@@ -44,6 +44,9 @@ interface AddTransactionModalProps {
     existingInvestments?: string[];
     initialBucket?: BudgetBucket;   // Pre-selecciona la cubeta al abrir
     lockedBucket?: boolean;         // Si es true, oculta el selector de cubeta
+    initialAccountId?: string;      // Pre-selecciona la cuenta al abrir
+    initialType?: TransactionType;  // Pre-selecciona el tipo de transacción
+    allowedTypes?: TransactionType[]; // Si se define, solo permite estos tipos (ej: [INCOME, TRANSFER])
 }
 
 export const AddTransactionModal: React.FC<AddTransactionModalProps> = ({
@@ -53,10 +56,13 @@ export const AddTransactionModal: React.FC<AddTransactionModalProps> = ({
     existingInvestments = [],
     initialBucket,
     lockedBucket = false,
+    initialAccountId,
+    initialType,
+    allowedTypes,
 }) => {
     const { user } = useAuth();
     const [type, setType] = useState<TransactionType>(
-        lockedBucket ? TransactionType.EXPENSE : TransactionType.EXPENSE
+        initialType || (lockedBucket ? TransactionType.EXPENSE : TransactionType.EXPENSE)
     );
     const [amount, setAmount] = useState('');
     const [description, setDescription] = useState('');
@@ -66,8 +72,12 @@ export const AddTransactionModal: React.FC<AddTransactionModalProps> = ({
     const [selectedCategoryId, setSelectedCategoryId] = useState<string>('');
     const [selectedSubcategoryId, setSelectedSubcategoryId] = useState<string>('');
 
-    const [accountId, setAccountId] = useState(accounts[0]?.id || '');
-    const [toAccountId, setToAccountId] = useState(accounts.length > 1 ? accounts[1].id : '');
+    const [accountId, setAccountId] = useState(initialAccountId || accounts[0]?.id || '');
+    const [toAccountId, setToAccountId] = useState(
+        accounts.length > 1
+            ? (accounts[0]?.id === (initialAccountId || accounts[0]?.id) ? accounts[1].id : accounts[0].id)
+            : ''
+    );
     const [date, setDate] = useState(new Date().toISOString().split('T')[0]);
 
     // Pending Bills State (Expense only)
@@ -75,7 +85,7 @@ export const AddTransactionModal: React.FC<AddTransactionModalProps> = ({
     const [dueDate, setDueDate] = useState('');
     const [bucketId, setBucketId] = useState<BudgetBucket>(initialBucket || BudgetBucket.ESSENTIAL);
 
-    // Synchronize if initialBucket or lockedBucket props change
+    // Synchronize if props change
     useEffect(() => {
         if (initialBucket) {
             setBucketId(initialBucket);
@@ -83,7 +93,18 @@ export const AddTransactionModal: React.FC<AddTransactionModalProps> = ({
         if (lockedBucket) {
             setType(TransactionType.EXPENSE);
         }
-    }, [initialBucket, lockedBucket]);
+        if (initialType) {
+            setType(initialType);
+        }
+        if (initialAccountId) {
+            setAccountId(initialAccountId);
+            // Si toAccountId es igual a initialAccountId, cambiarlo a otra cuenta si existe
+            if (accounts.length > 1 && toAccountId === initialAccountId) {
+                const other = accounts.find(a => a.id !== initialAccountId);
+                if (other) setToAccountId(other.id);
+            }
+        }
+    }, [initialBucket, lockedBucket, initialAccountId, initialType]);
 
     // Investment/Asset Tracking State
     const [isInvestmentReturn, setIsInvestmentReturn] = useState(false);
@@ -235,7 +256,9 @@ export const AddTransactionModal: React.FC<AddTransactionModalProps> = ({
                                 { type: TransactionType.INCOME, icon: TrendingUp, label: 'Ingreso', color: 'text-green-400' },
                                 { type: TransactionType.EXPENSE, icon: TrendingDown, label: 'Gasto', color: 'text-red-400' },
                                 { type: TransactionType.TRANSFER, icon: ArrowRightLeft, label: 'Transferencia', color: 'text-blue-400' },
-                            ].map((item) => (
+                            ]
+                                .filter((item) => !allowedTypes || allowedTypes.includes(item.type))
+                                .map((item) => (
                                 <button
                                     key={item.type}
                                     type="button"

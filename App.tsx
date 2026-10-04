@@ -31,14 +31,20 @@ const App: React.FC = () => {
       <nav className="w-full h-16 md:h-20 bg-gray-900 border-b border-gray-800 flex items-center justify-between shrink-0 px-4 md:px-6">
         <div className="flex items-center h-full">
 
-          {/* Logo */}
+          {/* Logo 5-5 Finanzas */}
           <div className="h-full flex items-center mr-6 md:mr-10">
-            <div className="relative h-12 w-24 md:h-16 md:w-32 flex items-center justify-center overflow-hidden">
-              <img
-                src="/logo_rodez.png"
-                alt="RODEZ"
-                className="h-24 md:h-32 w-auto object-contain scale-[1.3] md:scale-[1.5] transform origin-center"
-              />
+            <div className="flex items-center space-x-2.5 cursor-pointer" onClick={() => setView('BUDGET')}>
+              <div className="w-9 h-9 md:w-10 md:h-10 rounded-xl bg-gradient-to-br from-red-600 to-red-800 flex items-center justify-center font-black text-white text-sm md:text-base tracking-tight shadow-md shadow-red-900/40 border border-red-500/40">
+                5-5
+              </div>
+              <div className="flex flex-col">
+                <span className="text-sm md:text-base font-black tracking-tight text-white leading-none">
+                  5-5 <span className="text-rodez-red">FINANZAS</span>
+                </span>
+                <span className="text-[9px] md:text-[10px] text-gray-400 font-semibold tracking-wider uppercase leading-tight mt-0.5">
+                  Control de Presupuesto
+                </span>
+              </div>
             </div>
           </div>
 
@@ -111,11 +117,11 @@ const App: React.FC = () => {
               <div className="bg-gray-800/30 rounded-xl p-6 mb-6 border border-gray-800">
                 <h3 className="text-lg font-semibold mb-4 flex items-center text-white">
                   <Smartphone className="w-5 h-5 mr-2 text-rodez-red" />
-                  Aplicación Móvil
+                  Aplicación Móvil 5-5 Finanzas
                 </h3>
                 <div className="space-y-4">
                   <p className="text-gray-400 text-sm">
-                    Instala la app en tu dispositivo para un acceso más rápido y mejor experiencia.
+                    Instala 5-5 Finanzas en tu dispositivo para un acceso más rápido y mejor experiencia.
                   </p>
                   {isInstallable ? (
                     <button

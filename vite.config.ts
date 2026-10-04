@@ -16,9 +16,9 @@ export default defineConfig(({ mode }) => {
         registerType: 'autoUpdate',
         includeAssets: ['favicon.ico', 'apple-touch-icon.png', 'masked-icon.svg'],
         manifest: {
-          name: 'RODEZ',
-          short_name: 'RODEZ',
-          description: 'Bitácora de trading profesional RODEZ',
+          name: '5-5 Finanzas',
+          short_name: '5-5',
+          description: 'Gestión de finanzas personales 5-5',
           theme_color: '#0d1117',
           background_color: '#0d1117',
           display: 'standalone',

@@ -10,12 +10,18 @@ export const LoginScreen: React.FC = () => {
             <div className="max-w-md w-full">
                 {/* Logo and Title */}
                 <div className="text-center mb-8">
-                    <div className="w-64 h-32 md:w-80 md:h-40 mx-auto mb-8 overflow-hidden flex items-center justify-center">
-                        <img
-                            src="/logo_rodez.png"
-                            alt="RODEZ Logo"
-                            className="w-full h-full object-contain scale-[1.8] transform origin-center"
-                        />
+                    <div className="inline-flex items-center justify-center space-x-3 mb-2">
+                        <div className="w-14 h-14 md:w-16 md:h-16 rounded-2xl bg-gradient-to-br from-red-600 to-red-800 flex items-center justify-center font-black text-white text-2xl md:text-3xl tracking-tight shadow-xl shadow-red-900/40 border border-red-500/40">
+                            5-5
+                        </div>
+                        <div className="text-left">
+                            <h1 className="text-2xl md:text-3xl font-black tracking-tight text-white leading-none">
+                                5-5 <span className="text-rodez-red">FINANZAS</span>
+                            </h1>
+                            <span className="text-xs text-gray-400 font-semibold tracking-wider uppercase">
+                                Gestión Financiera Personal
+                            </span>
+                        </div>
                     </div>
                 </div>
 
