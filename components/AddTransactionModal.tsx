@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { X, TrendingUp, TrendingDown, ArrowRightLeft, AlertCircle, Percent } from 'lucide-react';
-import { TransactionType, Transaction, Account, Category, BudgetBucket } from '../types';
+import { TransactionType, Transaction, Account, Category, BudgetBucket, RecurringDebt } from '../types';
 import { getCategories, getEffectiveCategoryBucket } from '../services/budgetService';
 import { useAuth } from '../hooks/useAuth';
 
@@ -40,13 +40,17 @@ const ACTIVE_BUCKETS: BudgetBucket[] = [
 interface AddTransactionModalProps {
     accounts: Account[];
     onClose: () => void;
-    onSave: (transaction: Omit<Transaction, 'id' | 'createdAt'>) => Promise<void>;
+    onSave: (
+        transaction: Omit<Transaction, 'id' | 'createdAt'>,
+        investmentDebt?: Omit<RecurringDebt, 'id' | 'createdAt'>
+    ) => Promise<void>;
     existingInvestments?: string[];
     initialBucket?: BudgetBucket;   // Pre-selecciona la cubeta al abrir
     lockedBucket?: boolean;         // Si es true, oculta el selector de cubeta
     initialAccountId?: string;      // Pre-selecciona la cuenta al abrir
     initialType?: TransactionType;  // Pre-selecciona el tipo de transacción
     allowedTypes?: TransactionType[]; // Si se define, solo permite estos tipos (ej: [INCOME, TRANSFER])
+    initialInvestmentName?: string;
 }
 
 export const AddTransactionModal: React.FC<AddTransactionModalProps> = ({
@@ -59,6 +63,7 @@ export const AddTransactionModal: React.FC<AddTransactionModalProps> = ({
     initialAccountId,
     initialType,
     allowedTypes,
+    initialInvestmentName,
 }) => {
     const { user } = useAuth();
     const [type, setType] = useState<TransactionType>(
@@ -84,6 +89,12 @@ export const AddTransactionModal: React.FC<AddTransactionModalProps> = ({
     const [isPending, setIsPending] = useState(false);
     const [dueDate, setDueDate] = useState('');
     const [bucketId, setBucketId] = useState<BudgetBucket>(initialBucket || BudgetBucket.ESSENTIAL);
+    const [investmentHasDebt, setInvestmentHasDebt] = useState(false);
+    const [investmentDebtName, setInvestmentDebtName] = useState('');
+    const [investmentDebtAmount, setInvestmentDebtAmount] = useState('');
+    const [investmentMonthlyPayment, setInvestmentMonthlyPayment] = useState('');
+    const [investmentInstallments, setInvestmentInstallments] = useState('');
+    const [investmentDueDay, setInvestmentDueDay] = useState('15');
 
     // Synchronize if props change
     useEffect(() => {
@@ -110,6 +121,14 @@ export const AddTransactionModal: React.FC<AddTransactionModalProps> = ({
     const [isInvestmentReturn, setIsInvestmentReturn] = useState(false);
     const [investmentName, setInvestmentName] = useState('');
     const [isNewInvestment, setIsNewInvestment] = useState(false);
+
+    useEffect(() => {
+        if (initialInvestmentName) {
+            setInvestmentName(initialInvestmentName);
+            setIsNewInvestment(false);
+            if (initialType === TransactionType.INCOME) setIsInvestmentReturn(true);
+        }
+    }, [initialInvestmentName, initialType]);
 
     // Income bucket allocations — keyed by BudgetBucket, value = % (0-100)
     const [allocations, setAllocations] = useState<Record<BudgetBucket, number>>({ ...DEFAULT_ALLOCATIONS });
@@ -186,6 +205,24 @@ export const AddTransactionModal: React.FC<AddTransactionModalProps> = ({
             return;
         }
 
+        const isInvestmentExpense = type === TransactionType.EXPENSE && bucketId === BudgetBucket.INVESTMENT;
+        const debtPrincipal = Number(investmentDebtAmount);
+        const debtPayment = Number(investmentMonthlyPayment);
+        const installmentCount = Number(investmentInstallments);
+        const dueDayNumber = Number(investmentDueDay);
+        if (isInvestmentExpense && (!investmentName.trim() || isNewInvestment && !investmentName.trim())) {
+            alert('Selecciona o escribe el nombre de la inversión.');
+            return;
+        }
+        if (isInvestmentExpense && investmentHasDebt && (
+            !investmentDebtName.trim() || debtPrincipal <= 0 || debtPayment <= 0 ||
+            !Number.isInteger(installmentCount) || installmentCount <= 0 ||
+            !Number.isInteger(dueDayNumber) || dueDayNumber < 1 || dueDayNumber > 31
+        )) {
+            alert('Completa los datos de la deuda: nombre, monto, cuota, número de cuotas y día límite.');
+            return;
+        }
+
         try {
             setLoading(true);
 
@@ -199,8 +236,8 @@ export const AddTransactionModal: React.FC<AddTransactionModalProps> = ({
                 categoryId: type === TransactionType.EXPENSE && selectedCategoryId ? selectedCategoryId : undefined,
                 subcategoryId: type === TransactionType.EXPENSE && selectedSubcategoryId ? selectedSubcategoryId : undefined,
                 categoryName: type === TransactionType.EXPENSE ? selectedCategory?.name : undefined,
-                isPending: type === TransactionType.EXPENSE ? isPending : false,
-                dueDate: isPending && dueDate ? new Date(dueDate).getTime() : undefined,
+                isPending: type === TransactionType.EXPENSE && !isInvestmentExpense ? isPending : false,
+                dueDate: !isInvestmentExpense && isPending && dueDate ? new Date(dueDate).getTime() : undefined,
                 isPaid: false,
                 bucketId: type === TransactionType.EXPENSE ? bucketId : (isInvestmentReturn ? BudgetBucket.INVESTMENT : undefined),
                 investmentName: investmentName.trim() || undefined,
@@ -213,11 +250,30 @@ export const AddTransactionModal: React.FC<AddTransactionModalProps> = ({
                     : undefined,
             };
 
-            await onSave(transactionData);
+            const investmentDebt: Omit<RecurringDebt, 'id' | 'createdAt'> | undefined =
+                isInvestmentExpense && investmentHasDebt
+                    ? {
+                        name: investmentDebtName.trim(),
+                        investmentName: investmentName.trim(),
+                        totalAmount: debtPrincipal,
+                        remainingAmount: debtPrincipal,
+                        monthlyPayment: debtPayment,
+                        totalInstallments: installmentCount,
+                        installmentsPaid: 0,
+                        categoryId: selectedCategoryId || undefined,
+                        subcategoryId: selectedSubcategoryId || undefined,
+                        accountId,
+                        startDate: new Date(date).getTime(),
+                        dueDay: dueDayNumber,
+                        isActive: true,
+                    }
+                    : undefined;
+
+            await onSave(transactionData, investmentDebt);
             onClose();
         } catch (error) {
             console.error('Error saving transaction:', error);
-            alert('Error al guardar la transacción. Por favor intenta de nuevo.');
+            alert(error instanceof Error ? error.message : 'Error al guardar la transacción. Por favor intenta de nuevo.');
         } finally {
             setLoading(false);
         }
@@ -281,14 +337,16 @@ export const AddTransactionModal: React.FC<AddTransactionModalProps> = ({
 
                     {/* Amount */}
                     <div>
-                        <label className="block text-sm font-medium text-gray-400 mb-2">Monto</label>
+                        <label className="block text-sm font-medium text-gray-400 mb-2">
+                            {type === TransactionType.EXPENSE && bucketId === BudgetBucket.INVESTMENT ? 'Monto pagado hoy' : 'Monto'}
+                        </label>
                         <div className="relative">
                             <span className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-400">$</span>
                             <input
                                 type="number"
                                 value={amount}
                                 onChange={(e) => setAmount(e.target.value)}
-                                placeholder="0.00"
+                                placeholder={type === TransactionType.EXPENSE && bucketId === BudgetBucket.INVESTMENT ? 'Valor pagado de la inversión' : '0.00'}
                                 step="0.01"
                                 className="w-full bg-gray-800 border border-gray-700 rounded-lg pl-8 pr-4 py-3 text-white focus:ring-2 focus:ring-rodez-red focus:border-transparent outline-none transition-all text-lg font-bold"
                                 required
@@ -579,35 +637,86 @@ export const AddTransactionModal: React.FC<AddTransactionModalProps> = ({
                                 </div>
                             )}
 
-                            {/* Pending Bill Option */}
-                            <div className="bg-gray-800/50 p-4 rounded-lg border border-gray-700">
-                                <div className="flex items-center space-x-3 mb-3">
-                                    <input
-                                        type="checkbox"
-                                        id="isPending"
-                                        checked={isPending}
-                                        onChange={(e) => setIsPending(e.target.checked)}
-                                        className="w-5 h-5 rounded border-gray-600 text-rodez-red focus:ring-rodez-red bg-gray-700"
-                                    />
-                                    <label htmlFor="isPending" className="text-sm font-medium text-white flex items-center cursor-pointer">
-                                        <AlertCircle className="w-4 h-4 mr-2 text-yellow-500" />
-                                        Pendiente de Pago (Factura)
-                                    </label>
-                                </div>
-
-                                {isPending && (
-                                    <div>
-                                        <label className="block text-xs text-gray-400 mb-1">Fecha de Vencimiento</label>
+                            {bucketId === BudgetBucket.INVESTMENT ? (
+                                <div className="bg-gray-800/50 p-4 rounded-lg border border-gray-700">
+                                    <div className="flex items-center space-x-3">
                                         <input
-                                            type="date"
-                                            value={dueDate}
-                                            onChange={(e) => setDueDate(e.target.value)}
-                                            className="w-full bg-gray-800 border border-gray-600 rounded px-3 py-2 text-sm text-white focus:outline-none focus:border-rodez-red"
-                                            required={isPending}
+                                            type="checkbox"
+                                            id="investmentHasDebt"
+                                            checked={investmentHasDebt}
+                                            onChange={(event) => setInvestmentHasDebt(event.target.checked)}
+                                            className="w-5 h-5 rounded border-gray-600 text-rodez-red focus:ring-rodez-red bg-gray-700"
                                         />
+                                        <label htmlFor="investmentHasDebt" className="text-sm font-medium text-white flex items-center cursor-pointer">
+                                            <AlertCircle className="w-4 h-4 mr-2 text-yellow-500" />
+                                            Esta inversión tiene una deuda financiada
+                                        </label>
                                     </div>
-                                )}
-                            </div>
+
+                                    {investmentHasDebt && (
+                                        <div className="mt-4 space-y-3 border-t border-gray-700 pt-4">
+                                            <p className="text-xs text-gray-400">Registra aquí el valor financiado; el monto de arriba es lo que pagas hoy.</p>
+                                            <div>
+                                                <label className="block text-xs text-gray-400 mb-1">Nombre de la deuda</label>
+                                                <input type="text" value={investmentDebtName} onChange={event => setInvestmentDebtName(event.target.value)} placeholder={`Ej. Financiación de ${investmentName || 'la inversión'}`} className="w-full bg-gray-800 border border-gray-600 rounded px-3 py-2 text-sm text-white focus:outline-none focus:border-rodez-red" required={investmentHasDebt} />
+                                            </div>
+                                            <div>
+                                                <label className="block text-xs text-gray-400 mb-1">Monto total financiado</label>
+                                                <input type="number" min="1" step="0.01" value={investmentDebtAmount} onChange={event => setInvestmentDebtAmount(event.target.value)} placeholder="0.00" className="w-full bg-gray-800 border border-gray-600 rounded px-3 py-2 text-sm text-white focus:outline-none focus:border-rodez-red" required={investmentHasDebt} />
+                                            </div>
+                                            <div className="grid grid-cols-2 gap-3">
+                                                <div>
+                                                    <label className="block text-xs text-gray-400 mb-1">Cuota del mes</label>
+                                                    <input type="number" min="1" step="0.01" value={investmentMonthlyPayment} onChange={event => setInvestmentMonthlyPayment(event.target.value)} placeholder="0.00" className="w-full bg-gray-800 border border-gray-600 rounded px-3 py-2 text-sm text-white focus:outline-none focus:border-rodez-red" required={investmentHasDebt} />
+                                                </div>
+                                                <div>
+                                                    <label className="block text-xs text-gray-400 mb-1">Número de cuotas</label>
+                                                    <input type="number" min="1" step="1" value={investmentInstallments} onChange={event => setInvestmentInstallments(event.target.value)} placeholder="12" className="w-full bg-gray-800 border border-gray-600 rounded px-3 py-2 text-sm text-white focus:outline-none focus:border-rodez-red" required={investmentHasDebt} />
+                                                </div>
+                                            </div>
+                                            <div>
+                                                <label className="block text-xs text-gray-400 mb-1">Día límite de pago</label>
+                                                <input type="number" min="1" max="31" step="1" value={investmentDueDay} onChange={event => setInvestmentDueDay(event.target.value)} className="w-full bg-gray-800 border border-gray-600 rounded px-3 py-2 text-sm text-white focus:outline-none focus:border-rodez-red" required={investmentHasDebt} />
+                                            </div>
+                                            <div className="rounded border border-gray-700 bg-gray-900/70 p-3 text-sm">
+                                                <p className="text-gray-300">Inversión: <strong className="text-white">{investmentName || 'Sin nombre'}</strong></p>
+                                                <p className="text-gray-300">Monto financiado: <strong className="text-white">${(Number(investmentDebtAmount) || 0).toLocaleString()}</strong></p>
+                                                <p className="text-gray-300">Cuota: <strong className="text-white">${(Number(investmentMonthlyPayment) || 0).toLocaleString()}</strong> x <strong className="text-white">{Number(investmentInstallments) || 0}</strong></p>
+                                                <p className="mt-1 text-gray-300">Total programado: <strong className="text-rodez-red">${((Number(investmentMonthlyPayment) || 0) * (Number(investmentInstallments) || 0)).toLocaleString()}</strong></p>
+                                            </div>
+                                        </div>
+                                    )}
+                                </div>
+                            ) : (
+                                <div className="bg-gray-800/50 p-4 rounded-lg border border-gray-700">
+                                    <div className="flex items-center space-x-3 mb-3">
+                                        <input
+                                            type="checkbox"
+                                            id="isPending"
+                                            checked={isPending}
+                                            onChange={(e) => setIsPending(e.target.checked)}
+                                            className="w-5 h-5 rounded border-gray-600 text-rodez-red focus:ring-rodez-red bg-gray-700"
+                                        />
+                                        <label htmlFor="isPending" className="text-sm font-medium text-white flex items-center cursor-pointer">
+                                            <AlertCircle className="w-4 h-4 mr-2 text-yellow-500" />
+                                            Pendiente de Pago (Factura)
+                                        </label>
+                                    </div>
+
+                                    {isPending && (
+                                        <div>
+                                            <label className="block text-xs text-gray-400 mb-1">Fecha de Vencimiento</label>
+                                            <input
+                                                type="date"
+                                                value={dueDate}
+                                                onChange={(e) => setDueDate(e.target.value)}
+                                                className="w-full bg-gray-800 border border-gray-600 rounded px-3 py-2 text-sm text-white focus:outline-none focus:border-rodez-red"
+                                                required={isPending}
+                                            />
+                                        </div>
+                                    )}
+                                </div>
+                            )}
                         </>
                     )}
 

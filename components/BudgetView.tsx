@@ -5,20 +5,26 @@ import {
     FinancialSummary,
     AccountType,
     TransactionType,
-    BudgetBucket
+    BudgetBucket,
+    RecurringDebt
 } from '../types';
 import {
     getAllAccounts,
     createAccount,
     getAllTransactions,
     createTransaction,
-    getFinancialSummary
+    getFinancialSummary,
+    createRecurringDebt,
+    ensureRecurringDebtBills,
+    deleteRecurringDebt,
+    getAllRecurringDebts
 } from '../services/budgetService';
 import { useAuth } from '../hooks/useAuth';
 import { AddAccountModal } from './AddAccountModal';
 import { AddTransactionModal } from './AddTransactionModal';
 import { CategoriesView } from './CategoriesView';
 import { BillsView } from './BillsView';
+import { InvestmentsView } from './InvestmentsView';
 import { MonthlyTransactionsModal } from './MonthlyTransactionsModal';
 import {
     Wallet,
@@ -34,18 +40,20 @@ import {
     ArrowLeft,
     List,
     FileText,
-    X
+    X,
+    Building2
 } from 'lucide-react';
 
 interface BudgetViewProps { }
 
-type Tab = 'ACCOUNTS' | 'CATEGORIES' | 'BILLS';
+type Tab = 'ACCOUNTS' | 'CATEGORIES' | 'BILLS' | 'INVESTMENTS';
 
 export const BudgetView: React.FC<BudgetViewProps> = () => {
     const { user } = useAuth();
     const [activeTab, setActiveTab] = useState<Tab>('ACCOUNTS');
     const [accounts, setAccounts] = useState<Account[]>([]);
     const [transactions, setTransactions] = useState<Transaction[]>([]);
+    const [recurringDebts, setRecurringDebts] = useState<RecurringDebt[]>([]);
     const [summary, setSummary] = useState<FinancialSummary | null>(null);
     const [loading, setLoading] = useState(true);
     const [showAddAccount, setShowAddAccount] = useState(false);
@@ -55,6 +63,7 @@ export const BudgetView: React.FC<BudgetViewProps> = () => {
     const [modalInitialAccountId, setModalInitialAccountId] = useState<string | undefined>(undefined);
     const [modalInitialType, setModalInitialType] = useState<TransactionType | undefined>(undefined);
     const [modalAllowedTypes, setModalAllowedTypes] = useState<TransactionType[] | undefined>(undefined);
+    const [modalInitialInvestmentName, setModalInitialInvestmentName] = useState<string | undefined>(undefined);
     const [showMonthlyModal, setShowMonthlyModal] = useState(false);
     const [monthlyModalType, setMonthlyModalType] = useState<TransactionType>(TransactionType.INCOME);
     const [selectedBucket, setSelectedBucket] = useState<BudgetBucket | null>(null);
@@ -65,7 +74,7 @@ export const BudgetView: React.FC<BudgetViewProps> = () => {
 
     // Load data
     useEffect(() => {
-        if (user && activeTab === 'ACCOUNTS') {
+        if (user && (activeTab === 'ACCOUNTS' || activeTab === 'INVESTMENTS')) {
             loadData();
         }
     }, [user, activeTab, selectedMonth]);
@@ -74,15 +83,17 @@ export const BudgetView: React.FC<BudgetViewProps> = () => {
         if (!user) return;
         try {
             setLoading(true);
-            const [accountsData, transactionsData, summaryData] = await Promise.all([
+            const [accountsData, transactionsData, summaryData, debtData] = await Promise.all([
                 getAllAccounts(user.uid),
                 getAllTransactions(user.uid),
                 getFinancialSummary(user.uid, selectedMonth),
+                getAllRecurringDebts(user.uid),
             ]);
 
             setAccounts(accountsData);
             setTransactions(transactionsData);
             setSummary(summaryData);
+            setRecurringDebts(debtData);
         } catch (error) {
             console.error('Error loading budget data:', error);
         } finally {
@@ -102,16 +113,50 @@ export const BudgetView: React.FC<BudgetViewProps> = () => {
         }
     };
 
-    const handleAddTransaction = async (transactionData: Omit<Transaction, 'id' | 'createdAt'>) => {
+    const handleAddTransaction = async (
+        transactionData: Omit<Transaction, 'id' | 'createdAt'>,
+        investmentDebt?: Omit<RecurringDebt, 'id' | 'createdAt'>
+    ) => {
         if (!user) return;
+        let createdDebtId: string | undefined;
         try {
+            if (investmentDebt) {
+                const debt = await createRecurringDebt(investmentDebt, user.uid);
+                createdDebtId = debt.id;
+                await ensureRecurringDebtBills(user.uid);
+            }
             await createTransaction(transactionData, user.uid);
             await loadData();
             setShowAddTransaction(false);
         } catch (error) {
+            if (createdDebtId) {
+                try {
+                    await deleteRecurringDebt(createdDebtId, user.uid);
+                } catch (cleanupError) {
+                    console.error('Error reverting linked investment debt:', cleanupError);
+                }
+            }
             console.error('Error adding transaction:', error);
-            alert('Error al crear la transacción');
+            throw error;
         }
+    };
+
+    const openInvestmentContribution = (investmentName?: string) => {
+        setModalInitialBucket(BudgetBucket.INVESTMENT);
+        setModalLockedBucket(true);
+        setModalInitialType(TransactionType.EXPENSE);
+        setModalAllowedTypes([TransactionType.EXPENSE]);
+        setModalInitialInvestmentName(investmentName);
+        setShowAddTransaction(true);
+    };
+
+    const openInvestmentIncome = (investmentName: string) => {
+        setModalInitialBucket(undefined);
+        setModalLockedBucket(false);
+        setModalInitialType(TransactionType.INCOME);
+        setModalAllowedTypes([TransactionType.INCOME]);
+        setModalInitialInvestmentName(investmentName);
+        setShowAddTransaction(true);
     };
 
     const getAccountIcon = (type: AccountType) => {
@@ -232,36 +277,16 @@ export const BudgetView: React.FC<BudgetViewProps> = () => {
                 {/* Financial Summary */}
                 {summary && (
                     <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-                        {/* Total Balance */}
-                        <div className="bg-gradient-to-br from-blue-900/50 to-blue-800/30 border border-blue-700/50 rounded-xl p-6">
+                        {/* Net Balance */}
+                        <div className={`bg-gradient-to-br ${summary.netBalance >= 0 ? 'from-purple-900/50 to-purple-800/30 border-purple-700/50' : 'from-orange-900/50 to-orange-800/30 border-orange-700/50'} border rounded-xl p-6`}>
                             <div className="flex items-center justify-between mb-2">
-                                <span className="text-blue-300 text-sm font-medium">Balance Total</span>
-                                <DollarSign className="w-5 h-5 text-blue-400" />
+                                <span className={`${summary.netBalance >= 0 ? 'text-purple-300' : 'text-orange-300'} text-sm font-medium`}>
+                                    Balance Neto
+                                </span>
+                                <TrendingUp className={`w-5 h-5 ${summary.netBalance >= 0 ? 'text-purple-400' : 'text-orange-400'}`} />
                             </div>
                             <div className="text-3xl font-bold text-white">
-                                ${summary.totalBalance.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                            </div>
-                        </div>
-
-                        {/* Monthly Income */}
-                        <div
-                            onClick={() => {
-                                setMonthlyModalType(TransactionType.INCOME);
-                                setShowMonthlyModal(true);
-                            }}
-                            className="bg-gradient-to-br from-green-900/50 to-green-800/30 border border-green-700/50 rounded-xl p-6 cursor-pointer hover:border-green-500 transition-all group relative overflow-hidden"
-                        >
-                            <div className="absolute inset-0 bg-green-500/5 opacity-0 group-hover:opacity-100 transition-opacity"></div>
-                            <div className="flex items-center justify-between mb-2 relative z-10">
-                                <span className="text-green-300 text-sm font-medium group-hover:text-green-200">Ingresos del Mes</span>
-                                <ArrowUpRight className="w-5 h-5 text-green-400 group-hover:scale-110 transition-transform" />
-                            </div>
-                            <div className="text-3xl font-bold text-white relative z-10">
-                                +${summary.monthlyIncome.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                            </div>
-                            <div className="text-xs text-green-400/70 mt-2 flex items-center relative z-10">
-                                <Calendar className="w-3 h-3 mr-1" />
-                                Ver detalle mensual
+                                {summary.netBalance >= 0 ? '+' : ''}${summary.netBalance.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                             </div>
                         </div>
 
@@ -287,16 +312,36 @@ export const BudgetView: React.FC<BudgetViewProps> = () => {
                             </div>
                         </div>
 
-                        {/* Net Balance */}
-                        <div className={`bg-gradient-to-br ${summary.netBalance >= 0 ? 'from-purple-900/50 to-purple-800/30 border-purple-700/50' : 'from-orange-900/50 to-orange-800/30 border-orange-700/50'} border rounded-xl p-6`}>
+                        {/* Monthly Income */}
+                        <div
+                            onClick={() => {
+                                setMonthlyModalType(TransactionType.INCOME);
+                                setShowMonthlyModal(true);
+                            }}
+                            className="bg-gradient-to-br from-green-900/50 to-green-800/30 border border-green-700/50 rounded-xl p-6 cursor-pointer hover:border-green-500 transition-all group relative overflow-hidden"
+                        >
+                            <div className="absolute inset-0 bg-green-500/5 opacity-0 group-hover:opacity-100 transition-opacity"></div>
+                            <div className="flex items-center justify-between mb-2 relative z-10">
+                                <span className="text-green-300 text-sm font-medium group-hover:text-green-200">Ingresos del Mes</span>
+                                <ArrowUpRight className="w-5 h-5 text-green-400 group-hover:scale-110 transition-transform" />
+                            </div>
+                            <div className="text-3xl font-bold text-white relative z-10">
+                                +${summary.monthlyIncome.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                            </div>
+                            <div className="text-xs text-green-400/70 mt-2 flex items-center relative z-10">
+                                <Calendar className="w-3 h-3 mr-1" />
+                                Ver detalle mensual
+                            </div>
+                        </div>
+
+                        {/* Total Balance */}
+                        <div className="bg-gradient-to-br from-blue-900/50 to-blue-800/30 border border-blue-700/50 rounded-xl p-6">
                             <div className="flex items-center justify-between mb-2">
-                                <span className={`${summary.netBalance >= 0 ? 'text-purple-300' : 'text-orange-300'} text-sm font-medium`}>
-                                    Balance Neto
-                                </span>
-                                <TrendingUp className={`w-5 h-5 ${summary.netBalance >= 0 ? 'text-purple-400' : 'text-orange-400'}`} />
+                                <span className="text-blue-300 text-sm font-medium">Balance Total</span>
+                                <DollarSign className="w-5 h-5 text-blue-400" />
                             </div>
                             <div className="text-3xl font-bold text-white">
-                                {summary.netBalance >= 0 ? '+' : ''}${summary.netBalance.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                                ${summary.totalBalance.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                             </div>
                         </div>
                     </div>
@@ -403,6 +448,14 @@ export const BudgetView: React.FC<BudgetViewProps> = () => {
                         <FileText className="w-4 h-4" />
                         <span>Facturas</span>
                     </button>
+                    <button
+                        onClick={() => setActiveTab('INVESTMENTS')}
+                        className={`px-4 py-2 rounded-md text-sm font-medium transition-colors flex items-center space-x-2 whitespace-nowrap ${activeTab === 'INVESTMENTS' ? 'bg-gray-800 text-white shadow-sm' : 'text-gray-400 hover:text-white hover:bg-gray-800/50'
+                            }`}
+                    >
+                        <Building2 className="w-4 h-4" />
+                        <span>Inversiones</span>
+                    </button>
                 </div>
 
                 {/* Content */}
@@ -410,6 +463,16 @@ export const BudgetView: React.FC<BudgetViewProps> = () => {
                     {activeTab === 'ACCOUNTS' && renderAccountsTab()}
                     {activeTab === 'CATEGORIES' && <CategoriesView />}
                     {activeTab === 'BILLS' && <BillsView accounts={accounts} onRefresh={loadData} />}
+                    {activeTab === 'INVESTMENTS' && (
+                        <InvestmentsView
+                            accounts={accounts}
+                            transactions={transactions}
+                            debts={recurringDebts}
+                            onAddContribution={openInvestmentContribution}
+                            onAddIncome={openInvestmentIncome}
+                            onCreateInvestment={() => openInvestmentContribution()}
+                        />
+                    )}
                 </div>
             </div>
 
@@ -431,6 +494,7 @@ export const BudgetView: React.FC<BudgetViewProps> = () => {
                         setModalInitialAccountId(undefined);
                         setModalInitialType(undefined);
                         setModalAllowedTypes(undefined);
+                        setModalInitialInvestmentName(undefined);
                     }}
                     onSave={handleAddTransaction}
                     initialBucket={modalInitialBucket}
@@ -438,6 +502,7 @@ export const BudgetView: React.FC<BudgetViewProps> = () => {
                     initialAccountId={modalInitialAccountId}
                     initialType={modalInitialType}
                     allowedTypes={modalAllowedTypes}
+                    initialInvestmentName={modalInitialInvestmentName}
                     existingInvestments={Array.from(new Set(transactions
                         .filter(t => t.investmentName)
                         .map(t => t.investmentName as string)

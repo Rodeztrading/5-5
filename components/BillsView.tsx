@@ -1,32 +1,43 @@
 // BillsView.tsx - Gestión de facturas y deudas simples
 import React, { useState, useEffect } from 'react';
-import { Transaction, Account, Subcategory } from '../types';
-import { getAllTransactions, updateTransaction, getCategories, updateCategory } from '../services/budgetService';
+import { Transaction, Account, RecurringDebt } from '../types';
+import {
+    createRecurringDebt,
+    deleteRecurringDebt,
+    ensureRecurringDebtBills,
+    getAllRecurringDebts,
+    getAllTransactions,
+    payPendingBill,
+} from '../services/budgetService';
 import { useAuth } from '../hooks/useAuth';
-import { AlertCircle, Calendar, Check, Plus, Trash2, CreditCard } from 'lucide-react';
+import { AlertCircle, Calendar, Check, Plus, Trash2, CreditCard, X } from 'lucide-react';
 
 interface BillsViewProps {
     accounts: Account[];
     onRefresh: () => void;
 }
 
-interface SimpleDebt {
-    id: string;
-    name: string;
-    totalAmount: number;
-    createdAt: number;
-}
-
 export const BillsView: React.FC<BillsViewProps> = ({ accounts, onRefresh }) => {
     const { user } = useAuth();
     const [pendingBills, setPendingBills] = useState<Transaction[]>([]);
-    const [debts, setDebts] = useState<SimpleDebt[]>([]);
+    const [debts, setDebts] = useState<RecurringDebt[]>([]);
     const [loading, setLoading] = useState(true);
     const [showAddDebt, setShowAddDebt] = useState(false);
+    const [billToPay, setBillToPay] = useState<Transaction | null>(null);
+    const [paymentAccountId, setPaymentAccountId] = useState('');
+    const [payingBill, setPayingBill] = useState(false);
 
     // Form state
     const [debtName, setDebtName] = useState('');
     const [debtAmount, setDebtAmount] = useState('');
+    const [monthlyPayment, setMonthlyPayment] = useState('');
+    const [totalInstallments, setTotalInstallments] = useState('');
+    const [dueDay, setDueDay] = useState('15');
+    const [debtAccountId, setDebtAccountId] = useState(accounts[0]?.id || '');
+
+    useEffect(() => {
+        if (!debtAccountId && accounts.length > 0) setDebtAccountId(accounts[0].id);
+    }, [accounts, debtAccountId]);
 
     useEffect(() => {
         if (user) {
@@ -38,11 +49,14 @@ export const BillsView: React.FC<BillsViewProps> = ({ accounts, onRefresh }) => 
         if (!user) return;
         try {
             setLoading(true);
-            const transactions = await getAllTransactions(user.uid);
+            await ensureRecurringDebtBills(user.uid);
+            const [transactions, debtData] = await Promise.all([
+                getAllTransactions(user.uid),
+                getAllRecurringDebts(user.uid),
+            ]);
             const pending = transactions.filter(t => t.isPending && !t.isPaid);
             setPendingBills(pending);
-
-
+            setDebts(debtData);
         } catch (e) {
             console.error('Error loading data', e);
         } finally {
@@ -50,50 +64,61 @@ export const BillsView: React.FC<BillsViewProps> = ({ accounts, onRefresh }) => 
         }
     };
 
-    const handlePayBill = async (bill: Transaction) => {
-        if (!user || !confirm(`¿Pagar factura de $${bill.amount.toLocaleString()}?`)) return;
+    const handlePayBill = async () => {
+        if (!user || !billToPay || !paymentAccountId) return;
         try {
-            await updateTransaction(bill.id, { isPaid: true, isPending: false }, user.uid);
+            setPayingBill(true);
+            await payPendingBill(billToPay.id, paymentAccountId, user.uid);
+            setBillToPay(null);
             await loadData();
             onRefresh();
         } catch (e) {
             console.error('Error pagando factura', e);
-            alert('Error al pagar la factura');
+            alert(e instanceof Error ? e.message : 'Error al pagar la factura');
+        } finally {
+            setPayingBill(false);
         }
     };
 
+    const openPaymentDialog = (bill: Transaction) => {
+        setBillToPay(bill);
+        setPaymentAccountId(bill.accountId || accounts[0]?.id || '');
+    };
+
     const handleAddDebt = async () => {
-        if (!user || !debtName.trim() || !debtAmount) {
+        const principal = Number(debtAmount);
+        const payment = Number(monthlyPayment);
+        const installmentCount = Number(totalInstallments);
+        const dueDayNumber = Number(dueDay);
+        if (
+            !user || !debtName.trim() || principal <= 0 || payment <= 0 ||
+            !Number.isInteger(installmentCount) || installmentCount <= 0 ||
+            !Number.isInteger(dueDayNumber) || dueDayNumber < 1 || dueDayNumber > 31 || !debtAccountId
+        ) {
             alert('Por favor completa todos los campos');
             return;
         }
         try {
-            const newDebt: SimpleDebt = {
-                id: crypto.randomUUID(),
+            await createRecurringDebt({
                 name: debtName.trim(),
-                totalAmount: parseFloat(debtAmount),
-                createdAt: Date.now(),
-            };
-            const updated = [...debts, newDebt];
-            setDebts(updated);
+                totalAmount: principal,
+                remainingAmount: principal,
+                monthlyPayment: payment,
+                totalInstallments: installmentCount,
+                installmentsPaid: 0,
+                accountId: debtAccountId,
+                startDate: Date.now(),
+                dueDay: dueDayNumber,
+                isActive: true,
+            }, user.uid);
 
-
-            // Crear subcategoría en Facturas
-            const categories = await getCategories(user.uid);
-            const facturas = categories.find(c => c.name === 'Facturas');
-            if (facturas) {
-                const newSub: Subcategory = {
-                    id: `debt_${newDebt.id}`,
-                    name: newDebt.name,
-                    isDefault: false,
-                };
-                const subs = [...facturas.subcategories, newSub];
-                await updateCategory(facturas.id, { subcategories: subs }, user.uid);
-                console.log('Subcategoría de deuda creada');
-            }
-
+            await ensureRecurringDebtBills(user.uid);
+            await loadData();
             setDebtName('');
             setDebtAmount('');
+            setMonthlyPayment('');
+            setTotalInstallments('');
+            setDueDay('15');
             setShowAddDebt(false);
             onRefresh();
         } catch (e) {
@@ -103,30 +128,22 @@ export const BillsView: React.FC<BillsViewProps> = ({ accounts, onRefresh }) => 
     };
 
     const handleDeleteDebt = async (id: string) => {
-        if (!user || !confirm('¿Eliminar esta deuda?')) return;
+        if (!user || !confirm('¿Eliminar esta deuda y todas sus facturas vinculadas? Si ya pagaste cuotas, esos importes se devolverán a las cuentas usadas.')) return;
         try {
-            const updated = debts.filter(d => d.id !== id);
-            setDebts(updated);
-
-
-            // Eliminar subcategoría de Facturas
-            const categories = await getCategories(user.uid);
-            const facturas = categories.find(c => c.name === 'Facturas');
-            if (facturas) {
-                const subs = facturas.subcategories.filter(sc => sc.id !== `debt_${id}`);
-                await updateCategory(facturas.id, { subcategories: subs }, user.uid);
-                console.log('Subcategoría de deuda eliminada');
-            }
-
+            await deleteRecurringDebt(id, user.uid);
+            await loadData();
             onRefresh();
         } catch (e) {
             console.error('Error eliminando deuda', e);
-            alert('Error al eliminar la deuda');
+            alert(e instanceof Error ? e.message : 'Error al eliminar la deuda');
         }
     };
 
     const totalPendingBills = pendingBills.reduce((a, b) => a + b.amount, 0);
-    const totalDebts = debts.reduce((a, b) => a + b.totalAmount, 0);
+    const totalDebts = debts.reduce((sum, debt) => sum + (Number(debt.remainingAmount) || 0), 0);
+    const scheduledTotal = (Number(monthlyPayment) || 0) * (Number(totalInstallments) || 0);
+    const selectedPaymentAccount = accounts.find(account => account.id === paymentAccountId);
+    const hasEnoughBalance = !!selectedPaymentAccount && selectedPaymentAccount.balance >= (billToPay?.amount || 0);
 
     return (
         <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
@@ -169,7 +186,7 @@ export const BillsView: React.FC<BillsViewProps> = ({ accounts, onRefresh }) => 
                                 </div>
                                 <div className="flex items-center space-x-4">
                                     <span className="text-lg font-bold text-red-400">${bill.amount.toLocaleString()}</span>
-                                    <button onClick={() => handlePayBill(bill)} className="px-4 py-2 bg-green-600 hover:bg-green-700 text-white rounded-lg transition-colors text-sm font-medium">Pagar</button>
+                                    <button onClick={() => openPaymentDialog(bill)} className="px-4 py-2 bg-green-600 hover:bg-green-700 text-white rounded-lg transition-colors text-sm font-medium">Pagar</button>
                                 </div>
                             </div>
                         ))}
@@ -200,12 +217,40 @@ export const BillsView: React.FC<BillsViewProps> = ({ accounts, onRefresh }) => 
                             </div>
                             <div>
                                 <label className="block text-sm text-gray-400 mb-1">Monto Total</label>
-                                <input type="number" value={debtAmount} onChange={e => setDebtAmount(e.target.value)} placeholder="200000000" className="w-full bg-gray-800 border border-gray-600 rounded px-3 py-2 text-white text-sm focus:outline-none focus:border-rodez-red" />
+                                <input type="number" min="1" value={debtAmount} onChange={e => setDebtAmount(e.target.value)} placeholder="9000000" className="w-full bg-gray-800 border border-gray-600 rounded px-3 py-2 text-white text-sm focus:outline-none focus:border-rodez-red" />
+                            </div>
+                            <div>
+                                <label className="block text-sm text-gray-400 mb-1">Cuota del mes</label>
+                                <input type="number" min="1" value={monthlyPayment} onChange={e => setMonthlyPayment(e.target.value)} placeholder="500000" className="w-full bg-gray-800 border border-gray-600 rounded px-3 py-2 text-white text-sm focus:outline-none focus:border-rodez-red" />
+                            </div>
+                            <div className="grid grid-cols-2 gap-3">
+                                <div>
+                                    <label className="block text-sm text-gray-400 mb-1">Número de cuotas</label>
+                                    <input type="number" min="1" step="1" value={totalInstallments} onChange={e => setTotalInstallments(e.target.value)} placeholder="30" className="w-full bg-gray-800 border border-gray-600 rounded px-3 py-2 text-white text-sm focus:outline-none focus:border-rodez-red" />
+                                </div>
+                                <div>
+                                    <label className="block text-sm text-gray-400 mb-1">Día límite de pago</label>
+                                    <input type="number" min="1" max="31" step="1" value={dueDay} onChange={e => setDueDay(e.target.value)} className="w-full bg-gray-800 border border-gray-600 rounded px-3 py-2 text-white text-sm focus:outline-none focus:border-rodez-red" />
+                                </div>
+                            </div>
+                            <div>
+                                <label className="block text-sm text-gray-400 mb-1">Cuenta para pagar</label>
+                                <select value={debtAccountId} onChange={e => setDebtAccountId(e.target.value)} className="w-full bg-gray-800 border border-gray-600 rounded px-3 py-2 text-white text-sm focus:outline-none focus:border-rodez-red" required>
+                                    <option value="" disabled>Selecciona una cuenta</option>
+                                    {accounts.map(account => <option key={account.id} value={account.id}>{account.name}</option>)}
+                                </select>
                             </div>
                         </div>
+                        {(debtAmount || monthlyPayment || totalInstallments) && (
+                            <div className="mt-3 rounded border border-gray-700 bg-gray-800/70 p-3 text-sm">
+                                <p className="text-gray-300">M.t. <strong className="text-white">${(Number(debtAmount) || 0).toLocaleString()}</strong></p>
+                                <p className="text-gray-300">C.m. <strong className="text-white">${(Number(monthlyPayment) || 0).toLocaleString()}</strong> x <strong className="text-white">{Number(totalInstallments) || 0} cuotas</strong></p>
+                                <p className="mt-1 text-gray-300">Total programado: <strong className="text-rodez-red">${scheduledTotal.toLocaleString()}</strong></p>
+                            </div>
+                        )}
                         <div className="flex justify-end space-x-2 mt-3">
                             <button onClick={() => setShowAddDebt(false)} className="px-3 py-1.5 bg-gray-700 hover:bg-gray-600 text-white rounded text-sm">Cancelar</button>
-                            <button onClick={handleAddDebt} className="px-3 py-1.5 bg-rodez-red hover:bg-blue-600 text-white rounded text-sm">Guardar</button>
+                            <button onClick={handleAddDebt} disabled={!accounts.length} className="px-3 py-1.5 bg-rodez-red hover:bg-blue-600 disabled:opacity-50 text-white rounded text-sm">Guardar</button>
                         </div>
                     </div>
                 )}
@@ -213,7 +258,7 @@ export const BillsView: React.FC<BillsViewProps> = ({ accounts, onRefresh }) => 
                 {/* Resumen */}
                 {debts.length > 0 && (
                     <div className="bg-gray-900/50 rounded-lg p-4 mb-4">
-                        <p className="text-sm text-gray-400">Deuda Total Registrada</p>
+                        <p className="text-sm text-gray-400">Saldo pendiente de deudas</p>
                         <p className="text-3xl font-bold text-red-400">${totalDebts.toLocaleString()}</p>
                     </div>
                 )}
@@ -233,16 +278,59 @@ export const BillsView: React.FC<BillsViewProps> = ({ accounts, onRefresh }) => 
                                 <div className="flex items-start justify-between">
                                     <div className="flex-1">
                                         <h3 className="font-medium text-white text-lg">{debt.name}</h3>
+                                        {debt.investmentName && <p className="text-sm text-green-300 mt-1">Inversión asociada: {debt.investmentName}</p>}
                                         <p className="text-sm text-gray-400 mt-1">Registrada el {new Date(debt.createdAt).toLocaleDateString()}</p>
-                                        <p className="text-2xl font-bold text-red-400 mt-2">${debt.totalAmount.toLocaleString()}</p>
+                                        <p className="text-sm text-gray-300 mt-2">Monto inicial: <strong className="text-white">${debt.totalAmount.toLocaleString()}</strong></p>
+                                        <p className="text-sm text-gray-300">Cuota: <strong className="text-white">${debt.monthlyPayment.toLocaleString()}</strong> x <strong className="text-white">{debt.totalInstallments || 1} cuotas</strong></p>
+                                        <p className="text-sm text-gray-300">Pagadas: {debt.installmentsPaid || 0}/{debt.totalInstallments || 1} · Vence el día {debt.dueDay}</p>
+                                        <p className="text-sm text-gray-300">Total programado: <strong className="text-rodez-red">${(debt.monthlyPayment * (debt.totalInstallments || 1)).toLocaleString()}</strong></p>
+                                        <p className="text-xl font-bold text-red-400 mt-2">Saldo deuda: ${debt.remainingAmount.toLocaleString()}</p>
                                     </div>
-                                    <button onClick={() => handleDeleteDebt(debt.id)} className="text-gray-500 hover:text-red-400 transition-colors p-2"><Trash2 className="w-5 h-5" /></button>
+                                    <button onClick={() => handleDeleteDebt(debt.id)} title="Eliminar deuda y sus facturas vinculadas" className="text-gray-500 hover:text-red-400 transition-colors p-2"><Trash2 className="w-5 h-5" /></button>
                                 </div>
                             </div>
                         ))}
                     </div>
                 )}
             </div>
+            {billToPay && (
+                <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4" role="presentation">
+                    <div className="w-full max-w-md rounded-lg border border-gray-700 bg-gray-900 p-6 shadow-2xl" role="dialog" aria-modal="true" aria-labelledby="payment-dialog-title">
+                        <div className="mb-5 flex items-center justify-between">
+                            <h2 id="payment-dialog-title" className="text-lg font-semibold text-white">Pagar factura</h2>
+                            <button type="button" onClick={() => setBillToPay(null)} disabled={payingBill} className="text-gray-400 hover:text-white" aria-label="Cerrar">
+                                <X className="h-5 w-5" />
+                            </button>
+                        </div>
+                        <p className="mb-1 text-sm text-gray-300">{billToPay.description}</p>
+                        <p className="mb-4 text-xl font-bold text-red-400">${billToPay.amount.toLocaleString()}</p>
+                        <label htmlFor="payment-account" className="mb-2 block text-sm text-gray-300">Medio de pago</label>
+                        <select
+                            id="payment-account"
+                            value={paymentAccountId}
+                            onChange={event => setPaymentAccountId(event.target.value)}
+                            className="w-full rounded border border-gray-600 bg-gray-800 px-3 py-2 text-white focus:border-rodez-red focus:outline-none"
+                            required
+                        >
+                            <option value="" disabled>Selecciona una cuenta</option>
+                            {accounts.map(account => (
+                                <option key={account.id} value={account.id}>{account.name} ({account.type}) · Saldo ${account.balance.toLocaleString()}</option>
+                            ))}
+                        </select>
+                        {selectedPaymentAccount && !hasEnoughBalance && (
+                            <p className="mt-2 text-sm text-red-400" role="alert">
+                                Saldo insuficiente: disponible ${selectedPaymentAccount.balance.toLocaleString()}, factura ${billToPay.amount.toLocaleString()}.
+                            </p>
+                        )}
+                        <div className="mt-6 flex justify-end gap-3">
+                            <button type="button" onClick={() => setBillToPay(null)} disabled={payingBill} className="rounded bg-gray-700 px-4 py-2 text-sm text-white hover:bg-gray-600 disabled:opacity-50">Cancelar</button>
+                            <button type="button" onClick={handlePayBill} disabled={!paymentAccountId || !hasEnoughBalance || payingBill} className="rounded bg-green-600 px-4 py-2 text-sm font-medium text-white hover:bg-green-700 disabled:opacity-50">
+                                {payingBill ? 'Procesando...' : 'Confirmar pago'}
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
         </div>
     );
 };

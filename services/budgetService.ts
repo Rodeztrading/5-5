@@ -9,7 +9,9 @@ import {
     orderBy,
     where,
     Timestamp,
-    writeBatch
+    writeBatch,
+    getDoc,
+    runTransaction
 } from 'firebase/firestore';
 import { db } from '../config/firebase';
 import {
@@ -261,6 +263,10 @@ export const createTransaction = async (
     userId: string
 ): Promise<Transaction> => {
     try {
+        if (!Number.isFinite(transaction.amount) || transaction.amount <= 0) {
+            throw new Error('El monto debe ser mayor que cero.');
+        }
+
         // Remove undefined fields to avoid Firestore errors
         const cleanTransaction: any = {
             type: transaction.type,
@@ -284,65 +290,76 @@ export const createTransaction = async (
         if (transaction.isInvestmentReturn !== undefined) cleanTransaction.isInvestmentReturn = transaction.isInvestmentReturn;
         if (transaction.bucketAllocations) cleanTransaction.bucketAllocations = transaction.bucketAllocations;
 
-        const docRef = await addDoc(collection(db, `users/${userId}/transactions`), cleanTransaction);
+        const transactionRef = doc(collection(db, `users/${userId}/transactions`));
+        const accountRef = doc(db, `users/${userId}/accounts`, transaction.accountId);
+        const toAccountRef = transaction.toAccountId
+            ? doc(db, `users/${userId}/accounts`, transaction.toAccountId)
+            : undefined;
 
-        // EXTRA LOGIC for 50/25/15/10 Strategy
-        // If it's an expense from the STABILITY bucket, create a pending debt/bill automatically
-        if (transaction.type === TransactionType.EXPENSE && transaction.bucketId === BudgetBucket.STABILITY && !transaction.isPending) {
-            const debtTransaction: any = {
-                type: TransactionType.EXPENSE,
-                amount: transaction.amount,
-                description: `Reponer: ${transaction.description}`,
-                accountId: transaction.accountId,
-                date: Timestamp.fromMillis(transaction.date),
-                isPaid: false,
-                isPending: true,
-                dueDate: Timestamp.fromMillis(transaction.date + (30 * 24 * 60 * 60 * 1000)), // 30 days later
-                categoryName: 'Deuda a Fondo de Estabilidad',
-                createdAt: Timestamp.fromMillis(Date.now()),
-            };
-            await addDoc(collection(db, `users/${userId}/transactions`), debtTransaction);
-        }
+        await runTransaction(db, async firestoreTransaction => {
+            const shouldUpdateBalance = !transaction.isPending || transaction.isPaid;
+            const accountSnapshot = shouldUpdateBalance
+                ? await firestoreTransaction.get(accountRef)
+                : undefined;
+            const toAccountSnapshot = transaction.type === TransactionType.TRANSFER && toAccountRef
+                ? await firestoreTransaction.get(toAccountRef)
+                : undefined;
 
-        // Update account balance ONLY if it's not a pending bill or if it is paid
-        if (!transaction.isPending || transaction.isPaid) {
-            const accounts = await getAllAccounts(userId);
-            const account = accounts.find(a => a.id === transaction.accountId);
+            if (shouldUpdateBalance && !accountSnapshot?.exists()) {
+                throw new Error('La cuenta seleccionada no existe. No se pudo completar la transacción.');
+            }
+            if (transaction.type === TransactionType.TRANSFER && !toAccountSnapshot?.exists()) {
+                throw new Error('La cuenta de destino no existe. No se pudo completar la transferencia.');
+            }
 
-            if (account) {
-                let newBalance = account.balance;
+            const currentBalance = Number(accountSnapshot?.data()?.balance) || 0;
+            const spendsFromAccount = transaction.type === TransactionType.EXPENSE || transaction.type === TransactionType.TRANSFER;
+            if (shouldUpdateBalance && spendsFromAccount && currentBalance < transaction.amount) {
+                throw new Error(`Saldo insuficiente: disponible $${currentBalance.toLocaleString()}, gasto $${transaction.amount.toLocaleString()}.`);
+            }
 
+            firestoreTransaction.set(transactionRef, cleanTransaction);
+
+            if (transaction.type === TransactionType.EXPENSE && transaction.bucketId === BudgetBucket.STABILITY && !transaction.isPending) {
+                const debtTransactionRef = doc(collection(db, `users/${userId}/transactions`));
+                firestoreTransaction.set(debtTransactionRef, {
+                    type: TransactionType.EXPENSE,
+                    amount: transaction.amount,
+                    description: `Reponer: ${transaction.description}`,
+                    accountId: transaction.accountId,
+                    date: Timestamp.fromMillis(transaction.date),
+                    isPaid: false,
+                    isPending: true,
+                    dueDate: Timestamp.fromMillis(transaction.date + (30 * 24 * 60 * 60 * 1000)),
+                    categoryName: 'Deuda a Fondo de Estabilidad',
+                    createdAt: Timestamp.fromMillis(Date.now()),
+                });
+            }
+
+            if (shouldUpdateBalance) {
+                let newBalance = currentBalance;
                 if (transaction.type === TransactionType.INCOME) {
                     newBalance += transaction.amount;
-                } else if (transaction.type === TransactionType.EXPENSE) {
+                } else if (spendsFromAccount) {
                     newBalance -= transaction.amount;
-                } else if (transaction.type === TransactionType.TRANSFER && transaction.toAccountId) {
-                    newBalance -= transaction.amount;
-                    // Update destination account
-                    const toAccount = accounts.find(a => a.id === transaction.toAccountId);
-                    if (toAccount) {
-                        const toNewBalance = (toAccount.balance || 0) + transaction.amount;
-                        await updateAccount(transaction.toAccountId, {
-                            balance: toNewBalance,
-                        }, userId);
-                    } else {
-                        console.error('Destination account not found:', transaction.toAccountId);
-                        throw new Error('La cuenta de destino no existe. No se pudo completar la transferencia.');
-                    }
                 }
+                firestoreTransaction.update(accountRef, { balance: newBalance });
 
-                await updateAccount(transaction.accountId, { balance: newBalance }, userId);
+                if (transaction.type === TransactionType.TRANSFER && toAccountRef && toAccountSnapshot?.exists()) {
+                    const destinationBalance = Number(toAccountSnapshot.data().balance) || 0;
+                    firestoreTransaction.update(toAccountRef, { balance: destinationBalance + transaction.amount });
+                }
             }
-        }
+        });
 
         return {
             ...transaction,
-            id: docRef.id,
+            id: transactionRef.id,
             createdAt: Date.now(),
         };
     } catch (error) {
         console.error('Error creating transaction:', error);
-        throw new Error('Failed to create transaction');
+        throw error;
     }
 };
 
@@ -709,13 +726,149 @@ export const payMonthlyDebt = async (
     }
 };
 
+export const ensureRecurringDebtBills = async (userId: string): Promise<void> => {
+    const debts = (await getAllRecurringDebts(userId)).filter(debt => debt.isActive);
+    const now = new Date();
+    const currentMonthIndex = now.getFullYear() * 12 + now.getMonth();
+    const pendingWrites: { ref: ReturnType<typeof doc>; data: Record<string, unknown> }[] = [];
+
+    for (const debt of debts) {
+        const installmentCount = Math.max(1, debt.totalInstallments || 1);
+        const start = new Date(debt.startDate);
+        const firstMonthIndex = start.getFullYear() * 12 + start.getMonth();
+        const dueInstallments = Math.min(installmentCount, currentMonthIndex - firstMonthIndex + 1);
+
+        for (let installmentNumber = 1; installmentNumber <= dueInstallments; installmentNumber += 1) {
+            const monthIndex = firstMonthIndex + installmentNumber - 1;
+            const year = Math.floor(monthIndex / 12);
+            const month = monthIndex % 12;
+            const lastDay = new Date(year, month + 1, 0).getDate();
+            const dueDate = new Date(year, month, Math.min(debt.dueDay, lastDay), 12, 0, 0);
+            const billRef = doc(db, `users/${userId}/transactions`, `${debt.id}_${installmentNumber}`);
+            const billSnapshot = await getDoc(billRef);
+
+            if (!billSnapshot.exists()) {
+                pendingWrites.push({
+                    ref: billRef,
+                    data: {
+                        type: TransactionType.EXPENSE,
+                        amount: debt.monthlyPayment,
+                        description: `${debt.investmentName ? `${debt.investmentName} - ` : ''}${debt.name} - Cuota ${installmentNumber}/${installmentCount}`,
+                        accountId: debt.accountId,
+                        date: Timestamp.fromDate(dueDate),
+                        dueDate: Timestamp.fromDate(dueDate),
+                        isPaid: false,
+                        isPending: true,
+                        categoryName: `Deuda: ${debt.investmentName ? `${debt.investmentName} - ` : ''}${debt.name}`,
+                        recurringDebtId: debt.id,
+                        installmentNumber,
+                        createdAt: Timestamp.fromMillis(Date.now()),
+                    },
+                });
+            }
+        }
+    }
+
+    for (let offset = 0; offset < pendingWrites.length; offset += 450) {
+        const batch = writeBatch(db);
+        pendingWrites.slice(offset, offset + 450).forEach(({ ref, data }) => batch.set(ref, data));
+        await batch.commit();
+    }
+};
+
+export const payPendingBill = async (transactionId: string, paymentAccountId: string, userId: string): Promise<void> => {
+    const billRef = doc(db, `users/${userId}/transactions`, transactionId);
+
+    await runTransaction(db, async firestoreTransaction => {
+        const billSnapshot = await firestoreTransaction.get(billRef);
+        if (!billSnapshot.exists()) throw new Error('La factura no existe.');
+
+        const bill = billSnapshot.data();
+        if (!bill.isPending || bill.isPaid) throw new Error('Esta factura ya fue pagada.');
+
+        const accountRef = doc(db, `users/${userId}/accounts`, paymentAccountId);
+        const accountSnapshot = await firestoreTransaction.get(accountRef);
+        if (!accountSnapshot.exists()) throw new Error('No se encontró la cuenta asociada a esta factura.');
+
+        let debtRef;
+        let debtSnapshot;
+        if (bill.recurringDebtId) {
+            debtRef = doc(db, `users/${userId}/recurringDebts`, bill.recurringDebtId);
+            debtSnapshot = await firestoreTransaction.get(debtRef);
+        }
+
+        const accountBalance = Number(accountSnapshot.data().balance) || 0;
+        const billAmount = Number(bill.amount) || 0;
+        if (accountBalance < billAmount) {
+            throw new Error(`Saldo insuficiente. La cuenta tiene $${accountBalance.toLocaleString()} y la factura requiere $${billAmount.toLocaleString()}.`);
+        }
+        firestoreTransaction.update(accountRef, { balance: accountBalance - billAmount });
+        firestoreTransaction.update(billRef, {
+            isPaid: true,
+            isPending: false,
+            accountId: paymentAccountId,
+        });
+
+        if (debtRef && debtSnapshot?.exists()) {
+            const debt = debtSnapshot.data();
+            const installmentsPaid = (Number(debt.installmentsPaid) || 0) + 1;
+            const totalInstallments = Math.max(1, Number(debt.totalInstallments) || 1);
+            firestoreTransaction.update(debtRef, {
+                remainingAmount: Math.max(0, (Number(debt.remainingAmount) || 0) - Number(bill.amount)),
+                installmentsPaid,
+                isActive: installmentsPaid < totalInstallments,
+            });
+        }
+    });
+};
+
 export const deleteRecurringDebt = async (debtId: string, userId: string): Promise<void> => {
     try {
         const debtRef = doc(db, `users/${userId}/recurringDebts`, debtId);
-        await deleteDoc(debtRef);
+        const linkedBillsQuery = query(
+            collection(db, `users/${userId}/transactions`),
+            where('recurringDebtId', '==', debtId)
+        );
+        const [debtSnapshot, linkedBillsSnapshot, accounts] = await Promise.all([
+            getDoc(debtRef),
+            getDocs(linkedBillsQuery),
+            getAllAccounts(userId),
+        ]);
+        if (!debtSnapshot.exists()) return;
+
+        const refundsByAccount = new Map<string, number>();
+        linkedBillsSnapshot.docs.forEach(billDoc => {
+            const bill = billDoc.data();
+            if (bill.isPaid && bill.accountId) {
+                refundsByAccount.set(
+                    bill.accountId,
+                    (refundsByAccount.get(bill.accountId) || 0) + Number(bill.amount || 0)
+                );
+            }
+        });
+
+        const accountById = new Map(accounts.map(account => [account.id, account]));
+        const linkedBillDocs = linkedBillsSnapshot.docs;
+        for (let offset = 0; offset < linkedBillDocs.length; offset += 450) {
+            const batch = writeBatch(db);
+            linkedBillDocs.slice(offset, offset + 450).forEach(billDoc => batch.delete(billDoc.ref));
+            await batch.commit();
+        }
+
+        const batch = writeBatch(db);
+        refundsByAccount.forEach((amount, accountId) => {
+            const account = accountById.get(accountId);
+            if (account) {
+                batch.update(doc(db, `users/${userId}/accounts`, accountId), {
+                    balance: (Number(account.balance) || 0) + amount,
+                });
+            }
+        });
+        batch.delete(debtRef);
+        await batch.commit();
     } catch (error) {
         console.error('Error deleting recurring debt:', error);
-        throw new Error('Failed to delete recurring debt');
+        throw error;
     }
 };
 

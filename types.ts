@@ -139,9 +139,12 @@ export interface Transaction {
 export interface RecurringDebt {
   id: string;
   name: string; // Ej: "Carro", "Casa", "Préstamo Personal"
+  investmentName?: string; // Activo asociado cuando la deuda nace de una inversión
   totalAmount: number; // Monto total de la deuda (ej: 200.000.000)
   remainingAmount: number; // Saldo pendiente
   monthlyPayment: number; // Cuota mensual (ej: 5.000.000)
+  totalInstallments?: number; // Número total de cuotas
+  installmentsPaid?: number; // Cuotas pagadas
   categoryId?: string;
   subcategoryId?: string;
   accountId: string; // Cuenta desde la que se paga
