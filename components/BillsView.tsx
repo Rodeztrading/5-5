@@ -11,6 +11,7 @@ import {
 } from '../services/budgetService';
 import { useAuth } from '../hooks/useAuth';
 import { AlertCircle, Calendar, Check, Plus, Trash2, CreditCard, X } from 'lucide-react';
+import { useBrandedConfirm } from './BrandedConfirmDialog';
 
 interface BillsViewProps {
     accounts: Account[];
@@ -19,6 +20,7 @@ interface BillsViewProps {
 
 export const BillsView: React.FC<BillsViewProps> = ({ accounts, onRefresh }) => {
     const { user } = useAuth();
+    const { confirm: confirmAction, dialog: confirmDialog } = useBrandedConfirm();
     const [pendingBills, setPendingBills] = useState<Transaction[]>([]);
     const [debts, setDebts] = useState<RecurringDebt[]>([]);
     const [loading, setLoading] = useState(true);
@@ -128,7 +130,13 @@ export const BillsView: React.FC<BillsViewProps> = ({ accounts, onRefresh }) => 
     };
 
     const handleDeleteDebt = async (id: string) => {
-        if (!user || !confirm('¿Eliminar esta deuda y todas sus facturas vinculadas? Si ya pagaste cuotas, esos importes se devolverán a las cuentas usadas.')) return;
+        if (!user) return;
+        const confirmed = await confirmAction({
+            title: 'Eliminar deuda general',
+            message: '¿Eliminar esta deuda y todas sus facturas vinculadas? Si ya pagaste cuotas, esos importes se devolverán a las cuentas usadas.',
+            confirmLabel: 'Eliminar deuda',
+        });
+        if (!confirmed) return;
         try {
             await deleteRecurringDebt(id, user.uid);
             await loadData();
@@ -341,6 +349,7 @@ export const BillsView: React.FC<BillsViewProps> = ({ accounts, onRefresh }) => 
                     </div>
                 </div>
             )}
+            {confirmDialog}
         </div>
     );
 };

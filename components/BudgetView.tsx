@@ -19,7 +19,8 @@ import {
     ensureRecurringDebtBills,
     deleteRecurringDebt,
     getAllRecurringDebts,
-    getCategories
+    getCategories,
+    deleteAccount
 } from '../services/budgetService';
 import { useAuth } from '../hooks/useAuth';
 import { AddAccountModal } from './AddAccountModal';
@@ -29,6 +30,7 @@ import { BillsView } from './BillsView';
 import { InvestmentsView } from './InvestmentsView';
 import { MonthlyTransactionsModal } from './MonthlyTransactionsModal';
 import { calculateAccruedSavingsYield } from '../utils/savingsYield';
+import { useBrandedConfirm } from './BrandedConfirmDialog';
 import {
     Wallet,
     TrendingUp,
@@ -43,7 +45,8 @@ import {
     List,
     FileText,
     X,
-    Building2
+    Building2,
+    Trash2
 } from 'lucide-react';
 
 interface BudgetViewProps { }
@@ -52,6 +55,7 @@ type Tab = 'ACCOUNTS' | 'CATEGORIES' | 'BILLS' | 'INVESTMENTS';
 
 export const BudgetView: React.FC<BudgetViewProps> = () => {
     const { user } = useAuth();
+    const { confirm: confirmAction, dialog: confirmDialog } = useBrandedConfirm();
     const [activeTab, setActiveTab] = useState<Tab>('ACCOUNTS');
     const [accounts, setAccounts] = useState<Account[]>([]);
     const [transactions, setTransactions] = useState<Transaction[]>([]);
@@ -119,6 +123,24 @@ export const BudgetView: React.FC<BudgetViewProps> = () => {
         } catch (error) {
             console.error('Error adding account:', error);
             alert('Error al crear la cuenta');
+        }
+    };
+
+    const handleDeleteAccount = async (account: Account) => {
+        if (!user) return;
+        const confirmed = await confirmAction({
+            title: 'Eliminar cuenta',
+            message: `¿Eliminar la cuenta "${account.name}"? Sus movimientos históricos se conservarán, pero esta acción no se puede deshacer.`,
+            confirmLabel: 'Eliminar cuenta',
+        });
+        if (!confirmed) return;
+
+        try {
+            await deleteAccount(account.id, user.uid);
+            await loadData();
+        } catch (error) {
+            console.error('Error deleting account:', error);
+            alert('No se pudo eliminar la cuenta. Intenta de nuevo.');
         }
     };
 
@@ -405,6 +427,18 @@ export const BudgetView: React.FC<BudgetViewProps> = () => {
                                                 <p className="text-xs text-gray-500">{getAccountTypeName(account.type)}</p>
                                             </div>
                                         </div>
+                                        <button
+                                            type="button"
+                                            onClick={(event) => {
+                                                event.stopPropagation();
+                                                void handleDeleteAccount(account);
+                                            }}
+                                            className="rounded p-2 text-gray-500 transition-colors hover:bg-red-500/10 hover:text-red-400"
+                                            title={`Eliminar cuenta ${account.name}`}
+                                            aria-label={`Eliminar cuenta ${account.name}`}
+                                        >
+                                            <Trash2 className="h-4 w-4" />
+                                        </button>
                                     </div>
                                     <div className="text-2xl font-bold text-white mb-1">
                                         {account.type === AccountType.CREDIT_CARD ? 'Deuda actual: ' : ''}${account.balance.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
@@ -622,6 +656,7 @@ export const BudgetView: React.FC<BudgetViewProps> = () => {
                     </div>
                 </div>
             )}
+            {confirmDialog}
         </div>
     );
 };

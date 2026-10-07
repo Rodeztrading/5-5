@@ -27,6 +27,7 @@ import {
   Sparkles
 } from 'lucide-react';
 import { useAuth } from '../hooks/useAuth';
+import { useBrandedConfirm } from './BrandedConfirmDialog';
 
 export interface CategoryDefinition {
   id: string;
@@ -70,6 +71,7 @@ const INITIAL_CATEGORIES: CategoryDefinition[] = [
 
 export const StoryboardView: React.FC = () => {
   const { user } = useAuth();
+  const { confirm: confirmAction, dialog: confirmDialog } = useBrandedConfirm();
   const [items, setItems] = useState<StoryboardItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [selectedCategory, setSelectedCategory] = useState<string>('Todos');
@@ -236,7 +238,12 @@ export const StoryboardView: React.FC = () => {
 
   const handleDeleteItem = async (item: StoryboardItem, e: React.MouseEvent) => {
     e.stopPropagation();
-    if (!window.confirm('¿Eliminar esta imagen del tablero?')) return;
+    const confirmed = await confirmAction({
+      title: 'Eliminar imagen',
+      message: '¿Eliminar esta imagen del tablero? Esta acción no se puede deshacer.',
+      confirmLabel: 'Eliminar imagen',
+    });
+    if (!confirmed) return;
     try {
       await deleteStoryboardItem(item.id, item.imageUrl, user?.uid);
       if (lightboxItem?.id === item.id) setLightboxItem(null);
@@ -924,6 +931,7 @@ export const StoryboardView: React.FC = () => {
         </div>
       )}
 
+      {confirmDialog}
     </div>
   );
 };

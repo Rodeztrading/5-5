@@ -1,8 +1,9 @@
 import React, { useState, useEffect } from 'react';
 import { Category, Subcategory, TransactionType, BudgetBucket } from '../types';
-import { getCategories, saveCategory, updateCategory, getEffectiveCategoryBucket } from '../services/budgetService';
+import { getCategories, saveCategory, updateCategory, deleteCategory, getEffectiveCategoryBucket } from '../services/budgetService';
 import { useAuth } from '../hooks/useAuth';
 import { Plus, Edit2, Trash2, ChevronDown, ChevronRight, Save, X, Check, DollarSign, TrendingUp, PiggyBank, Smile, Layers } from 'lucide-react';
+import { useBrandedConfirm } from './BrandedConfirmDialog';
 
 const PRESET_COLORS = [
     '#FF5252', '#E91E63', '#9C27B0', '#673AB7',
@@ -23,6 +24,7 @@ const BUCKET_CONFIG: Record<BudgetBucket, { label: string; pct: number; color: s
 
 export const CategoriesView: React.FC = () => {
     const { user } = useAuth();
+    const { confirm: confirmAction, dialog: confirmDialog } = useBrandedConfirm();
     const [categories, setCategories] = useState<Category[]>([]);
     const [loading, setLoading] = useState(true);
     const [activeFilterTab, setActiveFilterTab] = useState<CategoryFilterTab>('ALL');
@@ -172,10 +174,17 @@ export const CategoriesView: React.FC = () => {
     };
 
     const handleDeleteSubcategory = async (categoryId: string, subcategoryId: string) => {
-        if (!user || !confirm('¿Estás seguro de eliminar esta subcategoría?')) return;
+        if (!user) return;
+        const category = categories.find(c => c.id === categoryId);
+        const subcategory = category?.subcategories?.find(item => item.id === subcategoryId);
+        const confirmed = await confirmAction({
+            title: 'Eliminar subcategoría',
+            message: `¿Eliminar la subcategoría "${subcategory?.name || ''}"?`,
+            confirmLabel: 'Eliminar subcategoría',
+        });
+        if (!confirmed) return;
 
         try {
-            const category = categories.find(c => c.id === categoryId);
             if (!category) return;
 
             const updatedSubcategories = (category.subcategories || []).filter(s => s.id !== subcategoryId);
@@ -187,6 +196,24 @@ export const CategoriesView: React.FC = () => {
             ));
         } catch (error) {
             console.error('Error deleting subcategory:', error);
+        }
+    };
+
+    const handleDeleteCategory = async (category: Category) => {
+        if (!user) return;
+        const confirmed = await confirmAction({
+            title: 'Eliminar categoría',
+            message: `¿Eliminar la categoría "${category.name}"?`,
+            confirmLabel: 'Eliminar categoría',
+        });
+        if (!confirmed) return;
+
+        try {
+            await deleteCategory(category.id, user.uid);
+            setCategories(prev => prev.filter(c => c.id !== category.id));
+        } catch (error) {
+            console.error('Error deleting category:', error);
+            alert('Error al eliminar la categoría');
         }
     };
 
@@ -511,17 +538,7 @@ export const CategoriesView: React.FC = () => {
                                                 </button>
                                                 {!category.isDefault && (
                                                     <button
-                                                        onClick={async () => {
-                                                            if (!user || !confirm(`¿Eliminar la categoría "${category.name}"?`)) return;
-                                                            try {
-                                                                const { deleteCategory } = await import('../services/budgetService');
-                                                                await deleteCategory(category.id, user.uid);
-                                                                setCategories(prev => prev.filter(c => c.id !== category.id));
-                                                            } catch (error) {
-                                                                console.error('Error deleting category:', error);
-                                                                alert('Error al eliminar la categoría');
-                                                            }
-                                                        }}
+                                                        onClick={() => void handleDeleteCategory(category)}
                                                         className="p-2 text-gray-400 hover:text-red-400 hover:bg-gray-800 rounded-lg transition-colors"
                                                         title="Eliminar Categoría"
                                                     >
@@ -592,6 +609,7 @@ export const CategoriesView: React.FC = () => {
                     })}
                 </div>
             )}
+            {confirmDialog}
         </div>
     );
 };

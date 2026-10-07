@@ -1,8 +1,8 @@
 import React, { useEffect, useState } from 'react';
-import { Transaction, TransactionType } from '../types';
-import { getTransactionsByMonth } from '../services/budgetService';
+import { Category, Transaction, TransactionType } from '../types';
+import { getCategories, getTransactionsByMonth } from '../services/budgetService';
 import { useAuth } from '../hooks/useAuth';
-import { X, ChevronLeft, ChevronRight, TrendingUp, TrendingDown, Calendar, DollarSign, ArrowUpRight, ArrowDownRight } from 'lucide-react';
+import { X, ChevronLeft, ChevronRight, DollarSign, ArrowUpRight, ArrowDownRight } from 'lucide-react';
 
 interface MonthlyTransactionsModalProps {
     isOpen: boolean;
@@ -14,6 +14,7 @@ export const MonthlyTransactionsModal: React.FC<MonthlyTransactionsModalProps> =
     const { user } = useAuth();
     const [currentMonth, setCurrentMonth] = useState(new Date());
     const [transactions, setTransactions] = useState<Transaction[]>([]);
+    const [categories, setCategories] = useState<Category[]>([]);
     const [loading, setLoading] = useState(false);
     const [activeType, setActiveType] = useState<TransactionType>(initialType);
 
@@ -36,11 +37,17 @@ export const MonthlyTransactionsModal: React.FC<MonthlyTransactionsModalProps> =
         setLoading(true);
         try {
             const monthStr = currentMonth.toISOString().slice(0, 7); // YYYY-MM
-            const allTransactions = await getTransactionsByMonth(monthStr, user.uid);
+            const [allTransactions, categoryData] = await Promise.all([
+                getTransactionsByMonth(monthStr, user.uid),
+                getCategories(user.uid),
+            ]);
 
-            // Filter by active type
-            const filtered = allTransactions.filter(t => t.type === activeType);
+            // Unpaid pending expenses remain only in the pending bills list.
+            const filtered = allTransactions.filter(t =>
+                t.type === activeType && !(t.type === TransactionType.EXPENSE && t.isPending && !t.isPaid)
+            );
             setTransactions(filtered);
+            setCategories(categoryData);
         } catch (error) {
             console.error('Error loading transactions:', error);
         } finally {
@@ -127,37 +134,35 @@ export const MonthlyTransactionsModal: React.FC<MonthlyTransactionsModalProps> =
                 </div>
 
                 {/* Transactions List */}
-                <div className="flex-1 overflow-y-auto p-4 space-y-3 custom-scrollbar">
+                <div className="min-h-0 flex-1 overflow-y-auto bg-gray-950 px-6 custom-scrollbar">
                     {loading ? (
                         <div className="flex justify-center py-10">
                             <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-rodez-red"></div>
                         </div>
                     ) : transactions.length > 0 ? (
-                        transactions.map((t) => (
-                            <div key={t.id} className="bg-gray-900 border border-gray-800 rounded-xl p-4 flex items-center justify-between hover:bg-gray-800/50 transition-colors group">
-                                <div className="flex items-center space-x-4">
-                                    <div className={`p-3 rounded-full ${t.type === TransactionType.INCOME ? 'bg-green-900/20 text-green-400' : 'bg-red-900/20 text-red-400'}`}>
-                                        {t.type === TransactionType.INCOME ? <TrendingUp size={18} /> : <TrendingDown size={18} />}
-                                    </div>
-                                    <div>
-                                        <h3 className="font-bold text-white group-hover:text-rodez-red transition-colors">{t.description}</h3>
-                                        <div className="flex items-center text-sm text-gray-500 space-x-2">
-                                            <span className="flex items-center">
-                                                <Calendar className="w-3 h-3 mr-1" />
-                                                {new Date(t.date).toLocaleDateString()}
-                                            </span>
-                                            <span>•</span>
-                                            <span className="bg-gray-800 px-2 py-0.5 rounded text-xs text-gray-300">
-                                                {t.categoryName || 'Sin categoría'}
-                                            </span>
+                        <div className="divide-y divide-gray-800">
+                            {transactions.map(t => {
+                                const category = categories.find(item => item.id === t.categoryId);
+                                const subcategoryName = category?.subcategories.find(item => item.id === t.subcategoryId)?.name;
+                                const categoryLabel = subcategoryName || category?.name || t.categoryName || 'General';
+
+                                return (
+                                    <div key={t.id} className="grid min-w-0 grid-cols-[20px_minmax(0,1fr)_auto] items-center gap-3 py-3 text-sm">
+                                        <span className={t.type === TransactionType.INCOME ? 'text-green-400' : 'text-gray-400'} aria-label={t.type === TransactionType.INCOME ? 'Ingreso' : 'Gasto'}>
+                                            {t.type === TransactionType.INCOME ? <ArrowUpRight className="h-4 w-4" /> : <ArrowDownRight className="h-4 w-4" />}
+                                        </span>
+                                        <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1">
+                                            <span className="truncate text-gray-100">{t.description}</span>
+                                            <span className="text-gray-500">{new Date(t.date).toLocaleDateString('es-CO', { day: 'numeric', month: 'numeric', year: '2-digit' })}</span>
+                                            <span className="text-gray-400">{categoryLabel}</span>
+                                        </div>
+                                        <div className={`whitespace-nowrap text-sm font-medium ${t.type === TransactionType.INCOME ? 'text-green-400' : 'text-gray-100'}`}>
+                                            {t.type === TransactionType.INCOME ? '+' : '-'}${t.amount.toLocaleString()}
                                         </div>
                                     </div>
-                                </div>
-                                <div className={`text-lg font-bold font-mono ${t.type === TransactionType.INCOME ? 'text-green-400' : 'text-red-400'}`}>
-                                    {t.type === TransactionType.INCOME ? '+' : '-'}${t.amount.toLocaleString()}
-                                </div>
-                            </div>
-                        ))
+                                );
+                            })}
+                        </div>
                     ) : (
                         <div className="text-center py-12 opacity-40">
                             <DollarSign className="w-16 h-16 mx-auto mb-4 text-gray-600" />
