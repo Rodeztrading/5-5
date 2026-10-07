@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import { BudgetView } from './components/BudgetView';
 import { LoginScreen } from './components/LoginScreen';
 import { LoadingScreen } from './components/LoadingScreen';
-import { Settings, LogOut, User, Download, Smartphone, Share, Trash2 } from 'lucide-react';
+import { Settings, LogOut, User, Download, Smartphone, Share, Trash2, X } from 'lucide-react';
 import { resetBudgetData } from './services/budgetService';
 import { useAuth } from './hooks/useAuth';
 import { usePWAInstall } from './hooks/usePWAInstall';
@@ -167,12 +167,27 @@ const App: React.FC = () => {
 
       {/* Budget Reset Confirmation Modal */}
       {showBudgetResetConfirm && (
-        <div className="fixed inset-0 bg-black/80 flex items-center justify-center z-50 p-4 backdrop-blur-sm">
-          <div className="bg-gray-900 border border-gray-800 rounded-xl max-w-md w-full p-6 shadow-2xl">
-            <h3 className="text-xl font-bold text-white mb-4 flex items-center">
-              <Trash2 className="w-6 h-6 mr-2 text-orange-500" />
-              ¿Borrar datos de Presupuesto?
-            </h3>
+        <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/80 p-4 backdrop-blur-sm">
+          <div className="w-full max-w-md overflow-hidden rounded-xl border border-gray-800 bg-gray-900 shadow-2xl">
+            <div className="flex items-center justify-between border-b border-gray-800 px-5 py-4">
+              <h2 className="text-sm font-bold text-white">
+                5-5 <span className="text-rodez-red">FINANZAS</span>
+              </h2>
+              <button
+                type="button"
+                onClick={() => setShowBudgetResetConfirm(false)}
+                disabled={loading}
+                className="rounded p-1 text-gray-400 hover:bg-gray-800 hover:text-white disabled:opacity-50"
+                aria-label="Cerrar confirmación"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+            <div className="p-6">
+              <h3 className="mb-4 flex items-center text-xl font-bold text-white">
+                <Trash2 className="mr-2 h-6 w-6 text-orange-500" />
+                ¿Borrar datos de Presupuesto?
+              </h3>
             <div className="space-y-4 text-gray-300 text-sm mb-6">
               <p>Estás a punto de eliminar permanentemente:</p>
               <ul className="list-disc pl-5 space-y-1 text-orange-400">
@@ -214,6 +229,7 @@ const App: React.FC = () => {
                   ? <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
                   : 'Confirmar Eliminación'}
               </button>
+            </div>
             </div>
           </div>
         </div>
