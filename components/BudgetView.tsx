@@ -26,6 +26,7 @@ import { CategoriesView } from './CategoriesView';
 import { BillsView } from './BillsView';
 import { InvestmentsView } from './InvestmentsView';
 import { MonthlyTransactionsModal } from './MonthlyTransactionsModal';
+import { calculateAccruedSavingsYield } from '../utils/savingsYield';
 import {
     Wallet,
     TrendingUp,
@@ -37,7 +38,6 @@ import {
     Calendar,
     ArrowUpRight,
     ArrowDownRight,
-    ArrowLeft,
     List,
     FileText,
     X,
@@ -54,6 +54,7 @@ export const BudgetView: React.FC<BudgetViewProps> = () => {
     const [accounts, setAccounts] = useState<Account[]>([]);
     const [transactions, setTransactions] = useState<Transaction[]>([]);
     const [recurringDebts, setRecurringDebts] = useState<RecurringDebt[]>([]);
+    const [yieldAsOf, setYieldAsOf] = useState(Date.now());
     const [summary, setSummary] = useState<FinancialSummary | null>(null);
     const [loading, setLoading] = useState(true);
     const [showAddAccount, setShowAddAccount] = useState(false);
@@ -68,9 +69,12 @@ export const BudgetView: React.FC<BudgetViewProps> = () => {
     const [monthlyModalType, setMonthlyModalType] = useState<TransactionType>(TransactionType.INCOME);
     const [selectedBucket, setSelectedBucket] = useState<BudgetBucket | null>(null);
     const [selectedMonth, setSelectedMonth] = useState(new Date().toISOString().slice(0, 7));
-    const [showInvestmentModal, setShowInvestmentModal] = useState(false);
     const [showBucketDetailModal, setShowBucketDetailModal] = useState(false);
-    const [selectedAssetForHistory, setSelectedAssetForHistory] = useState<string | null>(null);
+
+    useEffect(() => {
+        const timer = window.setInterval(() => setYieldAsOf(Date.now()), 60_000);
+        return () => window.clearInterval(timer);
+    }, []);
 
     // Load data
     useEffect(() => {
@@ -257,7 +261,7 @@ export const BudgetView: React.FC<BudgetViewProps> = () => {
                                             e.stopPropagation();
                                             setSelectedBucket(bucket.id);
                                             if (bucket.id === BudgetBucket.INVESTMENT) {
-                                                setShowInvestmentModal(true);
+                                                setActiveTab('INVESTMENTS');
                                             } else {
                                                 setShowBucketDetailModal(true);
                                             }
@@ -384,7 +388,7 @@ export const BudgetView: React.FC<BudgetViewProps> = () => {
                                         setShowAddTransaction(true);
                                     }}
                                     className="bg-gray-900 border border-gray-800 hover:border-rodez-red/50 hover:bg-gray-900/80 rounded-xl p-5 md:p-6 transition-all cursor-pointer group shadow-lg hover:scale-[1.01]"
-                                    title={`Click para registrar Ingreso o Transferencia en ${account.name}`}
+                                    title={`Click para registrar ${account.type === AccountType.CREDIT_CARD ? 'abono o transferencia' : 'ingreso o transferencia'} en ${account.name}`}
                                 >
                                     <div className="flex items-center justify-between mb-4">
                                         <div className="flex items-center space-x-3">
@@ -398,12 +402,26 @@ export const BudgetView: React.FC<BudgetViewProps> = () => {
                                         </div>
                                     </div>
                                     <div className="text-2xl font-bold text-white mb-1">
-                                        ${account.balance.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                                        {account.type === AccountType.CREDIT_CARD ? 'Deuda actual: ' : ''}${account.balance.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                                     </div>
+                                    {account.type === AccountType.CREDIT_CARD && (
+                                        <div className="mb-3 space-y-1 text-xs">
+                                            <p className="font-medium text-green-400">Disponible: ${(account.creditAvailable || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} / ${(account.creditLimit || 0).toLocaleString()}</p>
+                                            <p className="text-gray-400">Corte: día {account.creditCutoffDay} · Pago: día {account.creditPaymentDueDay}</p>
+                                        </div>
+                                    )}
+                                    {account.type === AccountType.SAVINGS && (account.savingsYieldRateAnnual || 0) > 0 && (
+                                        <div className="mb-3 space-y-1 text-xs">
+                                            <p className="text-gray-400">Tasa: {account.savingsYieldRateAnnual}% E.A.</p>
+                                            <p className="font-medium text-green-400">
+                                                Utilidad estimada: +${calculateAccruedSavingsYield(account, transactions, yieldAsOf).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                                            </p>
+                                        </div>
+                                    )}
                                     <div className="flex items-center justify-between pt-3 border-t border-gray-800/80 text-[11px] text-gray-400">
                                         <span className="text-green-400 font-semibold flex items-center group-hover:underline">
                                             <Plus className="w-3.5 h-3.5 mr-1" />
-                                            Ingreso / Transferir
+                                            {account.type === AccountType.CREDIT_CARD ? 'Abonar / Transferir' : 'Ingreso / Transferir'}
                                         </span>
                                         <span className="text-gray-500 uppercase tracking-wider text-[10px] font-bold">{account.currency}</span>
                                     </div>
@@ -516,140 +534,6 @@ export const BudgetView: React.FC<BudgetViewProps> = () => {
                 initialType={monthlyModalType}
             />
 
-            {/* Investment Detail Modal/View Placeholder */}
-            {showInvestmentModal && (
-                <div className="fixed inset-0 bg-black/80 flex items-center justify-center z-50 p-4 backdrop-blur-sm">
-                    <div className="bg-gray-900 border border-gray-800 rounded-xl w-full max-w-2xl shadow-2xl max-h-[90vh] flex flex-col">
-                        <div className="flex justify-between items-center p-6 border-b border-gray-800">
-                            <div className="flex items-center space-x-4">
-                                {selectedAssetForHistory && (
-                                    <button
-                                        onClick={() => setSelectedAssetForHistory(null)}
-                                        className="p-2 hover:bg-gray-800 rounded-lg text-gray-400 hover:text-white transition-colors"
-                                    >
-                                        <ArrowLeft className="w-5 h-5" />
-                                    </button>
-                                )}
-                                <div>
-                                    <h2 className="text-xl font-bold text-white">
-                                        {selectedAssetForHistory ? `Historial: ${selectedAssetForHistory}` : 'Resumen de Inversiones'}
-                                    </h2>
-                                    <p className="text-sm text-gray-400">
-                                        {selectedAssetForHistory ? 'Movimientos detallados del activo' : 'Rendimiento por activo'}
-                                    </p>
-                                </div>
-                            </div>
-                            <button onClick={() => {
-                                setShowInvestmentModal(false);
-                                setSelectedAssetForHistory(null);
-                            }} className="text-gray-400 hover:text-white transition-colors">
-                                <X className="w-6 h-6" />
-                            </button>
-                        </div>
-
-                        <div className="p-6 overflow-y-auto flex-1 bg-gray-950">
-                            {selectedAssetForHistory ? (
-                                /* Drill-down History View */
-                                <div className="space-y-4">
-                                    {transactions
-                                        .filter(t => t.investmentName === selectedAssetForHistory)
-                                        .sort((a, b) => b.date - a.date)
-                                        .map(t => (
-                                            <div key={t.id} className="flex items-center justify-between p-4 bg-gray-900 border border-gray-800 rounded-xl">
-                                                <div className="flex items-center space-x-4">
-                                                    <div className={`p-2 rounded-lg ${t.type === TransactionType.INCOME ? 'bg-green-500/10' : 'bg-red-500/10'}`}>
-                                                        {t.type === TransactionType.INCOME ? <ArrowUpRight className="w-5 h-5 text-green-400" /> : <ArrowDownRight className="w-5 h-5 text-red-400" />}
-                                                    </div>
-                                                    <div>
-                                                        <p className="font-bold text-white mb-0.5">{t.description}</p>
-                                                        <div className="flex items-center space-x-2">
-                                                            <span className="text-[10px] text-gray-500 uppercase font-bold">{new Date(t.date).toLocaleDateString()}</span>
-                                                            {t.isInvestmentReturn && <span className="text-[10px] font-bold text-green-500 bg-green-500/10 px-1.5 py-0.5 rounded uppercase tracking-tighter">Retorno</span>}
-                                                        </div>
-                                                    </div>
-                                                </div>
-                                                <div className={`text-lg font-black ${t.type === TransactionType.INCOME ? 'text-green-400' : 'text-white'}`}>
-                                                    {t.type === TransactionType.INCOME ? '+' : '-'}${t.amount.toLocaleString()}
-                                                </div>
-                                            </div>
-                                        ))}
-                                </div>
-                            ) : (
-                                /* Main Dashboard View */
-                                <div className="grid grid-cols-1 gap-6">
-                                    {Object.entries(
-                                        transactions
-                                            .filter(t => {
-                                                const isInvestment = t.bucketId === BudgetBucket.INVESTMENT || t.categoryName?.toLowerCase().includes('invers');
-                                                if (!isInvestment) return false;
-
-                                                // History view: Only show up to the selected month, or exactly selected month?
-                                                // Usually history is all-time, but the user said "si quiero ver noviembre solo salga noviembre".
-                                                // Let's stick to "up to selected month" for cumulative funds, or "selected month" if they want strict filtering.
-                                                // Given "cada mes inicie en cero menos inversión", they probably want to see the performance AS OF that month.
-                                                const tMonth = new Date(t.date).toISOString().slice(0, 7);
-                                                return tMonth <= selectedMonth;
-                                            })
-                                            .reduce((acc, t) => {
-                                                const name = t.investmentName || 'Otras Inversiones';
-                                                if (!acc[name]) acc[name] = { name, cost: 0, returns: 0, count: 0, lastDate: 0, items: [] };
-                                                if (t.type === TransactionType.EXPENSE) acc[name].cost += t.amount;
-                                                if (t.type === TransactionType.INCOME) acc[name].returns += t.amount;
-                                                acc[name].count++;
-                                                acc[name].lastDate = Math.max(acc[name].lastDate, t.date);
-                                                acc[name].items.push(t);
-                                                return acc;
-                                            }, {} as Record<string, { name: string, cost: number, returns: number, count: number, lastDate: number, items: Transaction[] }>)
-                                    ).map(([name, stats]) => {
-                                        const profit = stats.returns - stats.cost;
-                                        const isProfitable = profit >= 0;
-                                        return (
-                                            <div
-                                                key={name}
-                                                onClick={() => setSelectedAssetForHistory(name)}
-                                                className="bg-gray-900 border border-gray-800 rounded-xl overflow-hidden shadow-lg cursor-pointer hover:border-rodez-red/50 transition-all hover:scale-[1.01] active:scale-[0.99]"
-                                            >
-                                                <div className="p-5 border-b border-gray-800 flex justify-between items-center bg-gray-900/50">
-                                                    <div>
-                                                        <h3 className="text-lg font-bold text-white">{name}</h3>
-                                                        <p className="text-xs text-gray-500">{stats.count} transacciones • Última: {new Date(stats.lastDate).toLocaleDateString()}</p>
-                                                    </div>
-                                                    <div className={`px-3 py-1 rounded-full text-xs font-bold ${isProfitable ? 'bg-green-500/10 text-green-400 border border-green-500/20' : 'bg-red-500/10 text-red-400 border border-red-500/20'}`}>
-                                                        {isProfitable ? 'EN GANANCIAS' : 'EN RECUPERACIÓN'}
-                                                    </div>
-                                                </div>
-
-                                                <div className="p-5 grid grid-cols-3 gap-4 bg-gray-800/20">
-                                                    <div>
-                                                        <p className="text-[10px] text-gray-500 uppercase font-bold tracking-wider mb-1">Invertido</p>
-                                                        <p className="text-lg font-bold text-white">${stats.cost.toLocaleString()}</p>
-                                                    </div>
-                                                    <div>
-                                                        <p className="text-[10px] text-gray-500 uppercase font-bold tracking-wider mb-1">Retornos</p>
-                                                        <p className="text-lg font-bold text-green-400">${stats.returns.toLocaleString()}</p>
-                                                    </div>
-                                                    <div>
-                                                        <p className="text-[10px] text-gray-500 uppercase font-bold tracking-wider mb-1">Utilidad Neta</p>
-                                                        <p className={`text-lg font-bold ${profit >= 0 ? 'text-green-500' : 'text-red-400'}`}>
-                                                            {profit >= 0 ? '+' : ''}${profit.toLocaleString()}
-                                                        </p>
-                                                    </div>
-                                                </div>
-
-                                                {/* Mini Hint */}
-                                                <div className="px-5 py-2 bg-gray-800/10 flex items-center justify-center space-x-2 text-[10px] text-gray-500 font-bold uppercase tracking-widest border-t border-gray-800/50">
-                                                    <span>Ver Historial Detallado</span>
-                                                    <ArrowUpRight className="w-3 h-3" />
-                                                </div>
-                                            </div>
-                                        );
-                                    })}
-                                </div>
-                            )}
-                        </div>
-                    </div>
-                </div>
-            )}
             {/* Generic Bucket Detail Modal (Essential, Stability, Rewards) */}
             {showBucketDetailModal && selectedBucket && (
                 <div className="fixed inset-0 bg-black/80 flex items-center justify-center z-50 p-4 backdrop-blur-sm">
@@ -674,10 +558,11 @@ export const BudgetView: React.FC<BudgetViewProps> = () => {
                             </button>
                         </div>
 
-                        <div className="p-6 overflow-y-auto flex-1 bg-gray-950">
-                            <div className="space-y-4">
+                        <div className="overflow-y-auto flex-1 bg-gray-950 px-6">
+                            <div className="divide-y divide-gray-800">
                                 {transactions
                                     .filter(t => {
+                                        if (t.isPending && !t.isPaid) return false;
                                         // Filter by bucket and selected month
                                         // Use date key or date object to get YYYY-MM
                                         const tDate = new Date(t.date);
@@ -694,36 +579,32 @@ export const BudgetView: React.FC<BudgetViewProps> = () => {
                                     })
                                     .sort((a, b) => b.date - a.date)
                                     .map(t => (
-                                        <div key={t.id} className="flex items-center justify-between p-4 bg-gray-900 border border-gray-800 rounded-xl">
-                                            <div className="flex items-center space-x-4">
-                                                <div className={`p-2 rounded-lg ${t.type === TransactionType.INCOME ? 'bg-green-500/10' : 'bg-blue-500/10'}`}>
-                                                    {t.type === TransactionType.INCOME ? <ArrowUpRight className="w-5 h-5 text-green-400" /> : <ArrowDownRight className="w-5 h-5 text-blue-400" />}
-                                                </div>
-                                                <div>
-                                                    <p className="font-bold text-white mb-0.5">{t.description}</p>
-                                                    <div className="flex items-center space-x-2">
-                                                        <span className="text-[10px] text-gray-500 uppercase font-bold">{new Date(t.date).toLocaleDateString()}</span>
-                                                        <span className="text-[10px] text-gray-400">{t.categoryName || 'General'}</span>
-                                                    </div>
-                                                </div>
+                                        <div key={t.id} className="grid grid-cols-[20px_minmax(0,1fr)_auto] items-center gap-3 py-3 text-sm">
+                                            <span className={t.type === TransactionType.INCOME ? 'text-green-400' : 'text-gray-400'} aria-label={t.type === TransactionType.INCOME ? 'Ingreso' : 'Gasto'}>
+                                                {t.type === TransactionType.INCOME ? <ArrowUpRight className="h-4 w-4" /> : <ArrowDownRight className="h-4 w-4" />}
+                                            </span>
+                                            <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1 text-sm">
+                                                <span className="truncate text-gray-100">{t.description}</span>
+                                                <span className="text-gray-500">{new Date(t.date).toLocaleDateString('es-CO', { day: 'numeric', month: 'numeric', year: '2-digit' })}</span>
+                                                <span className="text-gray-400">{t.categoryName || 'General'}</span>
                                             </div>
-                                            <div className={`text-lg font-black ${t.type === TransactionType.INCOME ? 'text-green-400' : 'text-white'}`}>
+                                            <div className={`whitespace-nowrap text-sm font-medium ${t.type === TransactionType.INCOME ? 'text-green-400' : 'text-gray-100'}`}>
                                                 {t.type === TransactionType.INCOME ? '+' : '-'}${t.amount.toLocaleString()}
                                             </div>
                                         </div>
                                     ))}
                                 {transactions.filter(t => {
+                                    if (t.isPending && !t.isPaid) return false;
                                     const tDate = new Date(t.date);
                                     const tMonthKey = `${tDate.getFullYear()}-${String(tDate.getMonth() + 1).padStart(2, '0')}`;
                                     if (tMonthKey !== selectedMonth) return false;
-
                                     if (selectedBucket === BudgetBucket.ESSENTIAL) {
                                         return t.bucketId === BudgetBucket.ESSENTIAL || (!t.bucketId && t.type === TransactionType.EXPENSE);
                                     }
                                     return t.bucketId === selectedBucket;
                                 }).length === 0 && (
-                                        <div className="text-center py-12 text-gray-500">No hay transacciones registradas en esta cubeta para el mes seleccionado.</div>
-                                    )}
+                                    <div className="py-12 text-center text-sm text-gray-500">No hay transacciones registradas en esta cubeta para el mes seleccionado.</div>
+                                )}
                             </div>
                         </div>
                     </div>

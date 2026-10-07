@@ -62,6 +62,11 @@ export interface Account {
   name: string;
   type: AccountType;
   balance: number;
+  savingsYieldRateAnnual?: number;
+  creditLimit?: number;
+  creditAvailable?: number;
+  creditCutoffDay?: number;
+  creditPaymentDueDay?: number;
   currency: string;
   icon?: string;
   color?: string;

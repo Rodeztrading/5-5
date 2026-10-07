@@ -16,6 +16,7 @@ import {
 import { db } from '../config/firebase';
 import {
     Account,
+    AccountType,
     Transaction,
     MonthlyBudget,
     FinancialSummary,
@@ -313,9 +314,13 @@ export const createTransaction = async (
             }
 
             const currentBalance = Number(accountSnapshot?.data()?.balance) || 0;
+            const accountData = accountSnapshot?.data();
+            const isCreditCard = accountData?.type === AccountType.CREDIT_CARD;
+            const currentCreditAvailable = Number(accountData?.creditAvailable ?? (Number(accountData?.creditLimit) - currentBalance)) || 0;
             const spendsFromAccount = transaction.type === TransactionType.EXPENSE || transaction.type === TransactionType.TRANSFER;
-            if (shouldUpdateBalance && spendsFromAccount && currentBalance < transaction.amount) {
-                throw new Error(`Saldo insuficiente: disponible $${currentBalance.toLocaleString()}, gasto $${transaction.amount.toLocaleString()}.`);
+            const spendableBalance = isCreditCard ? currentCreditAvailable : currentBalance;
+            if (shouldUpdateBalance && spendsFromAccount && spendableBalance < transaction.amount) {
+                throw new Error(`Saldo insuficiente: disponible $${spendableBalance.toLocaleString()}, gasto $${transaction.amount.toLocaleString()}.`);
             }
 
             firestoreTransaction.set(transactionRef, cleanTransaction);
@@ -338,16 +343,43 @@ export const createTransaction = async (
 
             if (shouldUpdateBalance) {
                 let newBalance = currentBalance;
-                if (transaction.type === TransactionType.INCOME) {
-                    newBalance += transaction.amount;
-                } else if (spendsFromAccount) {
-                    newBalance -= transaction.amount;
+                if (isCreditCard) {
+                    const creditLimit = Number(accountData?.creditLimit) || currentCreditAvailable + currentBalance;
+                    let newCreditAvailable = currentCreditAvailable;
+                    if (spendsFromAccount) {
+                        newBalance += transaction.amount;
+                        newCreditAvailable -= transaction.amount;
+                    } else if (transaction.type === TransactionType.INCOME) {
+                        newBalance = Math.max(0, newBalance - transaction.amount);
+                        newCreditAvailable = Math.min(creditLimit, newCreditAvailable + transaction.amount);
+                    }
+                    firestoreTransaction.update(accountRef, {
+                        balance: newBalance,
+                        creditAvailable: newCreditAvailable,
+                    });
+                } else {
+                    if (transaction.type === TransactionType.INCOME) {
+                        newBalance += transaction.amount;
+                    } else if (spendsFromAccount) {
+                        newBalance -= transaction.amount;
+                    }
+                    firestoreTransaction.update(accountRef, { balance: newBalance });
                 }
-                firestoreTransaction.update(accountRef, { balance: newBalance });
 
                 if (transaction.type === TransactionType.TRANSFER && toAccountRef && toAccountSnapshot?.exists()) {
-                    const destinationBalance = Number(toAccountSnapshot.data().balance) || 0;
-                    firestoreTransaction.update(toAccountRef, { balance: destinationBalance + transaction.amount });
+                    const destinationData = toAccountSnapshot.data();
+                    const destinationBalance = Number(destinationData.balance) || 0;
+                    if (destinationData.type === AccountType.CREDIT_CARD) {
+                        const destinationLimit = Number(destinationData.creditLimit) || 0;
+                        const destinationAvailable = Number(destinationData.creditAvailable ?? (destinationLimit - destinationBalance)) || 0;
+                        const appliedPayment = Math.min(transaction.amount, destinationBalance);
+                        firestoreTransaction.update(toAccountRef, {
+                            balance: Math.max(0, destinationBalance - transaction.amount),
+                            creditAvailable: Math.min(destinationLimit, destinationAvailable + appliedPayment),
+                        });
+                    } else {
+                        firestoreTransaction.update(toAccountRef, { balance: destinationBalance + transaction.amount });
+                    }
                 }
             }
         });
@@ -487,7 +519,10 @@ export const deleteTransaction = async (transactionId: string, userId: string): 
 export const getFinancialSummary = async (userId: string, month?: string): Promise<FinancialSummary> => {
     try {
         const accounts = await getAllAccounts(userId);
-        const totalBalance = accounts.reduce((sum, acc) => sum + acc.balance, 0);
+        const totalBalance = accounts.reduce((sum, account) => {
+            if (account.type !== AccountType.CREDIT_CARD) return sum + account.balance;
+            return sum + (account.balance > 0 ? -account.balance : account.balance);
+        }, 0);
 
         const currentMonth = month || new Date().toISOString().slice(0, 7);
         const [year, mon] = currentMonth.split('-').map(Number);
@@ -797,12 +832,24 @@ export const payPendingBill = async (transactionId: string, paymentAccountId: st
             debtSnapshot = await firestoreTransaction.get(debtRef);
         }
 
-        const accountBalance = Number(accountSnapshot.data().balance) || 0;
+        const accountData = accountSnapshot.data();
+        const accountBalance = Number(accountData.balance) || 0;
         const billAmount = Number(bill.amount) || 0;
-        if (accountBalance < billAmount) {
-            throw new Error(`Saldo insuficiente. La cuenta tiene $${accountBalance.toLocaleString()} y la factura requiere $${billAmount.toLocaleString()}.`);
+        const isCreditCard = accountData.type === AccountType.CREDIT_CARD;
+        const creditLimit = Number(accountData.creditLimit) || 0;
+        const creditAvailable = Number(accountData.creditAvailable ?? (creditLimit - accountBalance)) || 0;
+        const availableToPay = isCreditCard ? creditAvailable : accountBalance;
+        if (availableToPay < billAmount) {
+            throw new Error(`Saldo insuficiente. La cuenta tiene $${availableToPay.toLocaleString()} disponibles y la factura requiere $${billAmount.toLocaleString()}.`);
         }
-        firestoreTransaction.update(accountRef, { balance: accountBalance - billAmount });
+        if (isCreditCard) {
+            firestoreTransaction.update(accountRef, {
+                balance: accountBalance + billAmount,
+                creditAvailable: creditAvailable - billAmount,
+            });
+        } else {
+            firestoreTransaction.update(accountRef, { balance: accountBalance - billAmount });
+        }
         firestoreTransaction.update(billRef, {
             isPaid: true,
             isPending: false,

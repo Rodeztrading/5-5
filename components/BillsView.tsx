@@ -1,6 +1,6 @@
 // BillsView.tsx - Gestión de facturas y deudas simples
 import React, { useState, useEffect } from 'react';
-import { Transaction, Account, RecurringDebt } from '../types';
+import { Transaction, Account, AccountType, RecurringDebt } from '../types';
 import {
     createRecurringDebt,
     deleteRecurringDebt,
@@ -143,7 +143,10 @@ export const BillsView: React.FC<BillsViewProps> = ({ accounts, onRefresh }) => 
     const totalDebts = debts.reduce((sum, debt) => sum + (Number(debt.remainingAmount) || 0), 0);
     const scheduledTotal = (Number(monthlyPayment) || 0) * (Number(totalInstallments) || 0);
     const selectedPaymentAccount = accounts.find(account => account.id === paymentAccountId);
-    const hasEnoughBalance = !!selectedPaymentAccount && selectedPaymentAccount.balance >= (billToPay?.amount || 0);
+    const paymentAvailable = selectedPaymentAccount?.type === AccountType.CREDIT_CARD
+        ? Number(selectedPaymentAccount.creditAvailable) || 0
+        : selectedPaymentAccount?.balance || 0;
+    const hasEnoughBalance = !!selectedPaymentAccount && paymentAvailable >= (billToPay?.amount || 0);
 
     return (
         <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
@@ -314,12 +317,16 @@ export const BillsView: React.FC<BillsViewProps> = ({ accounts, onRefresh }) => 
                         >
                             <option value="" disabled>Selecciona una cuenta</option>
                             {accounts.map(account => (
-                                <option key={account.id} value={account.id}>{account.name} ({account.type}) · Saldo ${account.balance.toLocaleString()}</option>
+                                <option key={account.id} value={account.id}>
+                                    {account.name} · Disponible ${(
+                                        account.type === AccountType.CREDIT_CARD ? account.creditAvailable || 0 : account.balance
+                                    ).toLocaleString()}
+                                </option>
                             ))}
                         </select>
                         {selectedPaymentAccount && !hasEnoughBalance && (
                             <p className="mt-2 text-sm text-red-400" role="alert">
-                                Saldo insuficiente: disponible ${selectedPaymentAccount.balance.toLocaleString()}, factura ${billToPay.amount.toLocaleString()}.
+                                Saldo insuficiente: disponible ${paymentAvailable.toLocaleString()}, factura ${billToPay.amount.toLocaleString()}.
                             </p>
                         )}
                         <div className="mt-6 flex justify-end gap-3">

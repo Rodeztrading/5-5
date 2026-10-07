@@ -173,9 +173,18 @@ export const AddTransactionModal: React.FC<AddTransactionModalProps> = ({
     }, [bucketId, type, categories]);
 
     const selectedCategory = categories.find(c => c.id === selectedCategoryId);
+    const selectedAccount = accounts.find(account => account.id === accountId);
 
     // ── Allocation helpers ──────────────────────────────────────────────────
     const parsedAmount = parseFloat(amount) || 0;
+    const isInvestmentExpense = type === TransactionType.EXPENSE && bucketId === BudgetBucket.INVESTMENT;
+    const requiresAvailableBalance = type === TransactionType.TRANSFER ||
+        type === TransactionType.EXPENSE && (isInvestmentExpense || !isPending);
+    const selectedAccountAvailable = selectedAccount?.type === 'CREDIT_CARD'
+        ? Number(selectedAccount.creditAvailable) || 0
+        : selectedAccount?.balance || 0;
+    const insufficientBalance = requiresAvailableBalance && parsedAmount > 0 &&
+        (!selectedAccount || selectedAccountAvailable < parsedAmount);
     const totalAllocated = ACTIVE_BUCKETS.reduce((s, b) => s + (allocations[b] || 0), 0);
 
     const handleAllocationChange = (bucket: BudgetBucket, raw: string) => {
@@ -205,7 +214,6 @@ export const AddTransactionModal: React.FC<AddTransactionModalProps> = ({
             return;
         }
 
-        const isInvestmentExpense = type === TransactionType.EXPENSE && bucketId === BudgetBucket.INVESTMENT;
         const debtPrincipal = Number(investmentDebtAmount);
         const debtPayment = Number(investmentMonthlyPayment);
         const installmentCount = Number(investmentInstallments);
@@ -352,6 +360,13 @@ export const AddTransactionModal: React.FC<AddTransactionModalProps> = ({
                                 required
                             />
                         </div>
+                        {requiresAvailableBalance && parsedAmount > 0 && selectedAccount && (
+                            <p className={`mt-2 text-xs ${insufficientBalance ? 'text-red-400' : 'text-gray-500'}`}>
+                                {insufficientBalance
+                                    ? `Saldo insuficiente: disponible $${selectedAccountAvailable.toLocaleString()}, requerido $${parsedAmount.toLocaleString()}.`
+                                    : `Saldo después del movimiento: $${(selectedAccountAvailable - parsedAmount).toLocaleString()}.`}
+                            </p>
+                        )}
                     </div>
 
                     {/* Description */}
@@ -732,9 +747,11 @@ export const AddTransactionModal: React.FC<AddTransactionModalProps> = ({
                                 className="w-full bg-gray-800 border border-gray-700 rounded-lg px-4 py-3 text-white focus:ring-2 focus:ring-rodez-red focus:border-transparent outline-none transition-all"
                                 required
                             >
-                                {accounts.map((acc) => (
-                                    <option key={acc.id} value={acc.id}>{acc.name} (${acc.balance})</option>
-                                ))}
+                                    {accounts.map((acc) => (
+                                        <option key={acc.id} value={acc.id}>
+                                            {acc.name} ({acc.type === 'CREDIT_CARD' ? `Disponible $${acc.creditAvailable ?? 0}` : `$${acc.balance}`})
+                                        </option>
+                                    ))}
                             </select>
                         </div>
 
@@ -748,7 +765,7 @@ export const AddTransactionModal: React.FC<AddTransactionModalProps> = ({
                                     required
                                 >
                                     {accounts.filter(a => a.id !== accountId).map((acc) => (
-                                        <option key={acc.id} value={acc.id}>{acc.name} (${acc.balance})</option>
+                                        <option key={acc.id} value={acc.id}>{acc.name} ({acc.type === 'CREDIT_CARD' ? `Disponible $${acc.creditAvailable ?? 0}` : `$${acc.balance}`})</option>
                                     ))}
                                 </select>
                             </div>
@@ -778,7 +795,7 @@ export const AddTransactionModal: React.FC<AddTransactionModalProps> = ({
                         </button>
                         <button
                             type="submit"
-                            disabled={loading || (type === TransactionType.INCOME && totalAllocated > 100)}
+                            disabled={loading || insufficientBalance || (type === TransactionType.INCOME && totalAllocated > 100)}
                             className={`flex-1 px-4 py-3 text-white rounded-lg transition-colors font-medium flex items-center justify-center disabled:opacity-50 disabled:cursor-not-allowed ${type === TransactionType.INCOME ? 'bg-green-600 hover:bg-green-700' :
                                 type === TransactionType.EXPENSE ? 'bg-red-600 hover:bg-red-700' :
                                     'bg-blue-600 hover:bg-blue-700'
