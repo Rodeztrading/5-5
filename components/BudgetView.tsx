@@ -6,7 +6,8 @@ import {
     AccountType,
     TransactionType,
     BudgetBucket,
-    RecurringDebt
+    RecurringDebt,
+    Category
 } from '../types';
 import {
     getAllAccounts,
@@ -17,7 +18,8 @@ import {
     createRecurringDebt,
     ensureRecurringDebtBills,
     deleteRecurringDebt,
-    getAllRecurringDebts
+    getAllRecurringDebts,
+    getCategories
 } from '../services/budgetService';
 import { useAuth } from '../hooks/useAuth';
 import { AddAccountModal } from './AddAccountModal';
@@ -53,6 +55,7 @@ export const BudgetView: React.FC<BudgetViewProps> = () => {
     const [activeTab, setActiveTab] = useState<Tab>('ACCOUNTS');
     const [accounts, setAccounts] = useState<Account[]>([]);
     const [transactions, setTransactions] = useState<Transaction[]>([]);
+    const [categories, setCategories] = useState<Category[]>([]);
     const [recurringDebts, setRecurringDebts] = useState<RecurringDebt[]>([]);
     const [yieldAsOf, setYieldAsOf] = useState(Date.now());
     const [summary, setSummary] = useState<FinancialSummary | null>(null);
@@ -87,17 +90,19 @@ export const BudgetView: React.FC<BudgetViewProps> = () => {
         if (!user) return;
         try {
             setLoading(true);
-            const [accountsData, transactionsData, summaryData, debtData] = await Promise.all([
+            const [accountsData, transactionsData, summaryData, debtData, categoriesData] = await Promise.all([
                 getAllAccounts(user.uid),
                 getAllTransactions(user.uid),
                 getFinancialSummary(user.uid, selectedMonth),
                 getAllRecurringDebts(user.uid),
+                getCategories(user.uid),
             ]);
 
             setAccounts(accountsData);
             setTransactions(transactionsData);
             setSummary(summaryData);
             setRecurringDebts(debtData);
+            setCategories(categoriesData);
         } catch (error) {
             console.error('Error loading budget data:', error);
         } finally {
@@ -586,7 +591,14 @@ export const BudgetView: React.FC<BudgetViewProps> = () => {
                                             <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1 text-sm">
                                                 <span className="truncate text-gray-100">{t.description}</span>
                                                 <span className="text-gray-500">{new Date(t.date).toLocaleDateString('es-CO', { day: 'numeric', month: 'numeric', year: '2-digit' })}</span>
-                                                <span className="text-gray-400">{t.categoryName || 'General'}</span>
+                                                <span className="text-gray-400">
+                                                    {categories
+                                                        .find(category => category.id === t.categoryId)
+                                                        ?.subcategories.find(subcategory => subcategory.id === t.subcategoryId)?.name
+                                                        || categories.find(category => category.id === t.categoryId)?.name
+                                                        || t.categoryName
+                                                        || 'General'}
+                                                </span>
                                             </div>
                                             <div className={`whitespace-nowrap text-sm font-medium ${t.type === TransactionType.INCOME ? 'text-green-400' : 'text-gray-100'}`}>
                                                 {t.type === TransactionType.INCOME ? '+' : '-'}${t.amount.toLocaleString()}

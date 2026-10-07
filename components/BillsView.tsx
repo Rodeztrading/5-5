@@ -151,8 +151,8 @@ export const BillsView: React.FC<BillsViewProps> = ({ accounts, onRefresh }) => 
     return (
         <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
             {/* Facturas */}
-            <div className="bg-gray-800 rounded-lg p-6 border border-gray-700">
-                <div className="flex justify-between items-center mb-4">
+            <div className="min-w-0 rounded-lg border border-gray-700 bg-gray-800/70 p-4 sm:p-6">
+                <div className="mb-3 flex flex-wrap items-center justify-between gap-3 border-b border-gray-700/70 pb-4">
                     <div>
                         <h2 className="text-xl font-bold text-white flex items-center">
                             <AlertCircle className="w-5 h-5 mr-2 text-yellow-500" /> Facturas Pendientes
@@ -173,23 +173,26 @@ export const BillsView: React.FC<BillsViewProps> = ({ accounts, onRefresh }) => 
                         <p className="text-sm mt-2 text-gray-600">Crea una transacción de tipo "Gasto" y marca "Pendiente de Pago"</p>
                     </div>
                 ) : (
-                    <div className="space-y-3">
+                    <div className="divide-y divide-gray-700/70">
                         {pendingBills.map(bill => (
-                            <div key={bill.id} className="bg-gray-900/50 rounded-lg p-4 flex items-center justify-between hover:bg-gray-900 transition-colors">
-                                <div className="flex-1">
-                                    <h3 className="font-medium text-white">{bill.description}</h3>
-                                    <div className="flex items-center space-x-4 mt-1 text-sm text-gray-400">
+                            <div key={bill.id} className="grid min-w-0 grid-cols-[minmax(0,1fr)_auto] items-center gap-x-3 gap-y-2 py-3 first:pt-1 last:pb-1">
+                                <div className="flex min-w-0 items-start gap-3">
+                                    <AlertCircle className="mt-0.5 h-4 w-4 shrink-0 text-yellow-500" />
+                                    <div className="min-w-0">
+                                        <h3 className="truncate text-sm font-medium text-white">{bill.description}</h3>
+                                        <div className="mt-1 flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1 text-xs text-gray-400">
                                         {bill.date && (
-                                            <span className="flex items-center"><Calendar className="w-4 h-4 mr-1" /> {new Date(typeof bill.date === 'object' ? (bill.date as any).toMillis() : bill.date).toLocaleDateString()}</span>
+                                                <span className="flex items-center"><Calendar className="mr-1 h-3.5 w-3.5 shrink-0" /> {new Date(typeof bill.date === 'object' ? (bill.date as any).toMillis() : bill.date).toLocaleDateString('es-CO')}</span>
                                         )}
                                         {bill.categoryName && (
-                                            <span className="px-2 py-0.5 bg-gray-700 rounded text-xs">{bill.categoryName}</span>
+                                                <span className="break-words">{bill.categoryName}</span>
                                         )}
+                                        </div>
                                     </div>
                                 </div>
-                                <div className="flex items-center space-x-4">
-                                    <span className="text-lg font-bold text-red-400">${bill.amount.toLocaleString()}</span>
-                                    <button onClick={() => openPaymentDialog(bill)} className="px-4 py-2 bg-green-600 hover:bg-green-700 text-white rounded-lg transition-colors text-sm font-medium">Pagar</button>
+                                <div className="flex shrink-0 flex-col items-end gap-2 sm:flex-row sm:items-center">
+                                    <span className="whitespace-nowrap text-sm font-semibold text-red-400">${bill.amount.toLocaleString()}</span>
+                                    <button onClick={() => openPaymentDialog(bill)} className="rounded bg-green-600 px-3 py-1.5 text-xs font-medium text-white transition-colors hover:bg-green-700 sm:px-4 sm:py-2 sm:text-sm">Pagar</button>
                                 </div>
                             </div>
                         ))}
