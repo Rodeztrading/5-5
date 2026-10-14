@@ -20,9 +20,10 @@ interface BillsViewProps {
     onRefresh: () => void;
     mode?: 'full' | 'monthly';
     month?: string;
+    newDebtFormRequest?: number;
 }
 
-export const BillsView: React.FC<BillsViewProps> = ({ accounts, onRefresh, mode = 'full', month }) => {
+export const BillsView: React.FC<BillsViewProps> = ({ accounts, onRefresh, mode = 'full', month, newDebtFormRequest = 0 }) => {
     const { user } = useAuth();
     const { confirm: confirmAction, dialog: confirmDialog } = useBrandedConfirm();
     const [pendingBills, setPendingBills] = useState<Transaction[]>([]);
@@ -45,6 +46,10 @@ export const BillsView: React.FC<BillsViewProps> = ({ accounts, onRefresh, mode 
     useEffect(() => {
         if (!debtAccountId && accounts.length > 0) setDebtAccountId(accounts[0].id);
     }, [accounts, debtAccountId]);
+
+    useEffect(() => {
+        if (newDebtFormRequest > 0) setShowAddDebt(true);
+    }, [newDebtFormRequest]);
 
     useEffect(() => {
         if (user) {
@@ -198,6 +203,54 @@ export const BillsView: React.FC<BillsViewProps> = ({ accounts, onRefresh, mode 
         : selectedPaymentAccount?.balance || 0;
     const hasEnoughBalance = !!selectedPaymentAccount && paymentAvailable >= (billToPay?.amount || 0);
 
+    const debtForm = (
+        <div className="rounded-lg border border-gray-700 bg-gray-900/50 p-4">
+            <h3 className="mb-3 font-semibold text-white">Registrar Nueva Deuda</h3>
+            <div className="space-y-3">
+                <div>
+                    <label className="mb-1 block text-sm text-gray-400">Nombre de la Deuda</label>
+                    <input type="text" value={debtName} onChange={e => setDebtName(e.target.value)} placeholder="Ej: Préstamo Carro" className="w-full rounded border border-gray-600 bg-gray-800 px-3 py-2 text-sm text-white focus:outline-none focus:border-rodez-red" />
+                </div>
+                <div>
+                    <label className="mb-1 block text-sm text-gray-400">Monto Total</label>
+                    <input type="number" min="1" value={debtAmount} onChange={e => setDebtAmount(e.target.value)} placeholder="9000000" className="w-full rounded border border-gray-600 bg-gray-800 px-3 py-2 text-sm text-white focus:outline-none focus:border-rodez-red" />
+                </div>
+                <div>
+                    <label className="mb-1 block text-sm text-gray-400">Cuota del mes</label>
+                    <input type="number" min="1" value={monthlyPayment} onChange={e => setMonthlyPayment(e.target.value)} placeholder="500000" className="w-full rounded border border-gray-600 bg-gray-800 px-3 py-2 text-sm text-white focus:outline-none focus:border-rodez-red" />
+                </div>
+                <div className="grid grid-cols-2 gap-3">
+                    <div>
+                        <label className="mb-1 block text-sm text-gray-400">Número de cuotas</label>
+                        <input type="number" min="1" step="1" value={totalInstallments} onChange={e => setTotalInstallments(e.target.value)} placeholder="30" className="w-full rounded border border-gray-600 bg-gray-800 px-3 py-2 text-sm text-white focus:outline-none focus:border-rodez-red" />
+                    </div>
+                    <div>
+                        <label className="mb-1 block text-sm text-gray-400">Día límite de pago</label>
+                        <input type="number" min="1" max="31" step="1" value={dueDay} onChange={e => setDueDay(e.target.value)} className="w-full rounded border border-gray-600 bg-gray-800 px-3 py-2 text-sm text-white focus:outline-none focus:border-rodez-red" />
+                    </div>
+                </div>
+                <div>
+                    <label className="mb-1 block text-sm text-gray-400">Cuenta para pagar</label>
+                    <select value={debtAccountId} onChange={e => setDebtAccountId(e.target.value)} className="w-full rounded border border-gray-600 bg-gray-800 px-3 py-2 text-sm text-white focus:outline-none focus:border-rodez-red" required>
+                        <option value="" disabled>Selecciona una cuenta</option>
+                        {accounts.map(account => <option key={account.id} value={account.id}>{account.name}</option>)}
+                    </select>
+                </div>
+            </div>
+            {(debtAmount || monthlyPayment || totalInstallments) && (
+                <div className="mt-3 rounded border border-gray-700 bg-gray-800/70 p-3 text-sm">
+                    <p className="text-gray-300">M.t. <strong className="text-white">${(Number(debtAmount) || 0).toLocaleString()}</strong></p>
+                    <p className="text-gray-300">C.m. <strong className="text-white">${(Number(monthlyPayment) || 0).toLocaleString()}</strong> x <strong className="text-white">{Number(totalInstallments) || 0} cuotas</strong></p>
+                    <p className="mt-1 text-gray-300">Total programado: <strong className="text-rodez-red">${scheduledTotal.toLocaleString()}</strong></p>
+                </div>
+            )}
+            <div className="mt-3 flex justify-end space-x-2">
+                <button type="button" onClick={() => setShowAddDebt(false)} className="rounded bg-gray-700 px-3 py-1.5 text-sm text-white hover:bg-gray-600">Cancelar</button>
+                <button type="button" onClick={handleAddDebt} disabled={!accounts.length} className="rounded bg-rodez-red px-3 py-1.5 text-sm text-white hover:bg-blue-600 disabled:opacity-50">Guardar</button>
+            </div>
+        </div>
+    );
+
     return (
         <div className={mode === 'monthly' ? 'min-w-0 rounded-lg border border-gray-800 bg-gray-900/40 p-4' : 'grid grid-cols-1 gap-6 md:grid-cols-2'}>
             {/* Facturas */}
@@ -283,51 +336,7 @@ export const BillsView: React.FC<BillsViewProps> = ({ accounts, onRefresh, mode 
 
                 {/* Formulario */}
                 {showAddDebt && (
-                    <div className="bg-gray-900/50 rounded-lg p-4 mb-4 border border-gray-700">
-                        <h3 className="font-semibold text-white mb-3">Registrar Nueva Deuda</h3>
-                        <div className="space-y-3">
-                            <div>
-                                <label className="block text-sm text-gray-400 mb-1">Nombre de la Deuda</label>
-                                <input type="text" value={debtName} onChange={e => setDebtName(e.target.value)} placeholder="Ej: Préstamo Carro" className="w-full bg-gray-800 border border-gray-600 rounded px-3 py-2 text-white text-sm focus:outline-none focus:border-rodez-red" />
-                            </div>
-                            <div>
-                                <label className="block text-sm text-gray-400 mb-1">Monto Total</label>
-                                <input type="number" min="1" value={debtAmount} onChange={e => setDebtAmount(e.target.value)} placeholder="9000000" className="w-full bg-gray-800 border border-gray-600 rounded px-3 py-2 text-white text-sm focus:outline-none focus:border-rodez-red" />
-                            </div>
-                            <div>
-                                <label className="block text-sm text-gray-400 mb-1">Cuota del mes</label>
-                                <input type="number" min="1" value={monthlyPayment} onChange={e => setMonthlyPayment(e.target.value)} placeholder="500000" className="w-full bg-gray-800 border border-gray-600 rounded px-3 py-2 text-white text-sm focus:outline-none focus:border-rodez-red" />
-                            </div>
-                            <div className="grid grid-cols-2 gap-3">
-                                <div>
-                                    <label className="block text-sm text-gray-400 mb-1">Número de cuotas</label>
-                                    <input type="number" min="1" step="1" value={totalInstallments} onChange={e => setTotalInstallments(e.target.value)} placeholder="30" className="w-full bg-gray-800 border border-gray-600 rounded px-3 py-2 text-white text-sm focus:outline-none focus:border-rodez-red" />
-                                </div>
-                                <div>
-                                    <label className="block text-sm text-gray-400 mb-1">Día límite de pago</label>
-                                    <input type="number" min="1" max="31" step="1" value={dueDay} onChange={e => setDueDay(e.target.value)} className="w-full bg-gray-800 border border-gray-600 rounded px-3 py-2 text-white text-sm focus:outline-none focus:border-rodez-red" />
-                                </div>
-                            </div>
-                            <div>
-                                <label className="block text-sm text-gray-400 mb-1">Cuenta para pagar</label>
-                                <select value={debtAccountId} onChange={e => setDebtAccountId(e.target.value)} className="w-full bg-gray-800 border border-gray-600 rounded px-3 py-2 text-white text-sm focus:outline-none focus:border-rodez-red" required>
-                                    <option value="" disabled>Selecciona una cuenta</option>
-                                    {accounts.map(account => <option key={account.id} value={account.id}>{account.name}</option>)}
-                                </select>
-                            </div>
-                        </div>
-                        {(debtAmount || monthlyPayment || totalInstallments) && (
-                            <div className="mt-3 rounded border border-gray-700 bg-gray-800/70 p-3 text-sm">
-                                <p className="text-gray-300">M.t. <strong className="text-white">${(Number(debtAmount) || 0).toLocaleString()}</strong></p>
-                                <p className="text-gray-300">C.m. <strong className="text-white">${(Number(monthlyPayment) || 0).toLocaleString()}</strong> x <strong className="text-white">{Number(totalInstallments) || 0} cuotas</strong></p>
-                                <p className="mt-1 text-gray-300">Total programado: <strong className="text-rodez-red">${scheduledTotal.toLocaleString()}</strong></p>
-                            </div>
-                        )}
-                        <div className="flex justify-end space-x-2 mt-3">
-                            <button onClick={() => setShowAddDebt(false)} className="px-3 py-1.5 bg-gray-700 hover:bg-gray-600 text-white rounded text-sm">Cancelar</button>
-                            <button onClick={handleAddDebt} disabled={!accounts.length} className="px-3 py-1.5 bg-rodez-red hover:bg-blue-600 disabled:opacity-50 text-white rounded text-sm">Guardar</button>
-                        </div>
-                    </div>
+                    <div className="mb-4">{debtForm}</div>
                 )}
 
                 {/* Resumen */}
@@ -368,6 +377,18 @@ export const BillsView: React.FC<BillsViewProps> = ({ accounts, onRefresh, mode 
                     </div>
                 )}
             </div>}
+
+            {mode === 'monthly' && showAddDebt && (
+                <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/80 p-4 backdrop-blur-sm" role="presentation">
+                    <div className="max-h-[90vh] w-full max-w-lg overflow-y-auto rounded-xl border border-gray-700 bg-gray-900 p-5 shadow-2xl" role="dialog" aria-modal="true" aria-labelledby="new-general-debt-title">
+                        <div className="mb-4 flex items-center justify-between">
+                            <h2 id="new-general-debt-title" className="text-lg font-semibold text-white">Nueva deuda general</h2>
+                            <button type="button" onClick={() => setShowAddDebt(false)} className="rounded p-1 text-gray-400 hover:bg-gray-800 hover:text-white" aria-label="Cerrar"><X className="h-5 w-5" /></button>
+                        </div>
+                        {debtForm}
+                    </div>
+                </div>
+            )}
             {billToPay && (
                 <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4" role="presentation">
                     <div className="w-full max-w-md rounded-lg border border-gray-700 bg-gray-900 p-6 shadow-2xl" role="dialog" aria-modal="true" aria-labelledby="payment-dialog-title">

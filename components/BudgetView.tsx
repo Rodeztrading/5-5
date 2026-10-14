@@ -43,7 +43,6 @@ import {
     ArrowUpRight,
     ArrowDownRight,
     List,
-    FileText,
     X,
     Building2,
     Trash2
@@ -51,7 +50,7 @@ import {
 
 interface BudgetViewProps { }
 
-type Tab = 'ACCOUNTS' | 'CATEGORIES' | 'BILLS' | 'INVESTMENTS';
+type Tab = 'ACCOUNTS' | 'CATEGORIES' | 'INVESTMENTS';
 
 export const BudgetView: React.FC<BudgetViewProps> = () => {
     const { user } = useAuth();
@@ -64,6 +63,7 @@ export const BudgetView: React.FC<BudgetViewProps> = () => {
     const [summary, setSummary] = useState<FinancialSummary | null>(null);
     const [loading, setLoading] = useState(true);
     const [showAddAccount, setShowAddAccount] = useState(false);
+    const [newDebtFormRequest, setNewDebtFormRequest] = useState(0);
     const [showAddTransaction, setShowAddTransaction] = useState(false);
     const [modalInitialBucket, setModalInitialBucket] = useState<BudgetBucket | undefined>(undefined);
     const [modalLockedBucket, setModalLockedBucket] = useState(false);
@@ -136,6 +136,24 @@ export const BudgetView: React.FC<BudgetViewProps> = () => {
         } catch (error) {
             console.error('Error deleting account:', error);
             alert('No se pudo eliminar la cuenta. Intenta de nuevo.');
+        }
+    };
+
+    const handleDeleteRecurringDebt = async (debt: RecurringDebt) => {
+        if (!user) return;
+        const confirmed = await confirmAction({
+            title: 'Eliminar deuda general',
+            message: `¿Eliminar la deuda "${debt.name}" y todas sus facturas vinculadas? Si ya pagaste cuotas, esos importes se devolverán a las cuentas usadas.`,
+            confirmLabel: 'Eliminar deuda',
+        });
+        if (!confirmed) return;
+
+        try {
+            await deleteRecurringDebt(debt.id, user.uid);
+            await loadData();
+        } catch (error) {
+            console.error('Error deleting recurring debt:', error);
+            alert(error instanceof Error ? error.message : 'Error al eliminar la deuda');
         }
     };
 
@@ -235,6 +253,13 @@ export const BudgetView: React.FC<BudgetViewProps> = () => {
             { id: BudgetBucket.STABILITY, label: 'Fondo de estabilidad', icon: <PiggyBank className="h-4 w-4 text-blue-400" /> },
             { id: BudgetBucket.REWARDS, label: 'Recompensas', icon: <DollarSign className="h-4 w-4 text-amber-400" /> },
         ];
+        const defaultAccountOrder = { CASH: 0, INVESTMENT: 1, STABILITY: 2 };
+        const orderedAccounts = [...accounts].sort((a, b) => {
+            if (a.defaultKey && !b.defaultKey) return 1;
+            if (!a.defaultKey && b.defaultKey) return -1;
+            if (a.defaultKey && b.defaultKey) return defaultAccountOrder[a.defaultKey] - defaultAccountOrder[b.defaultKey];
+            return b.createdAt - a.createdAt;
+        });
         const activeDebts = recurringDebts.filter(debt => debt.isActive);
         const totalDebtBalance = activeDebts.reduce((total, debt) => total + (Number(debt.remainingAmount) || 0), 0);
 
@@ -291,7 +316,7 @@ export const BudgetView: React.FC<BudgetViewProps> = () => {
                         <button onClick={() => setShowAddAccount(true)} className="flex items-center gap-2 py-2 text-xs text-gray-400 hover:text-white"><Plus className="h-4 w-4" /> Crear cuenta</button>
                     ) : (
                         <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 xl:grid-cols-4">
-                            {accounts.map(account => (
+                            {orderedAccounts.map(account => (
                                 <div key={account.id} className="grid min-w-0 grid-cols-[minmax(0,1fr)_auto_auto] items-center gap-2 rounded-md border border-gray-800 bg-gray-950/50 px-2 py-2">
                                     <button
                                         type="button"
@@ -322,7 +347,13 @@ export const BudgetView: React.FC<BudgetViewProps> = () => {
                 </section>
 
                 <div className="grid grid-cols-1 gap-3 lg:col-span-full lg:min-h-0 lg:grid-cols-3">
-                    <BillsView accounts={accounts} onRefresh={loadData} mode="monthly" month={selectedMonth} />
+                    <BillsView
+                        accounts={accounts}
+                        onRefresh={loadData}
+                        mode="monthly"
+                        month={selectedMonth}
+                        newDebtFormRequest={newDebtFormRequest}
+                    />
 
                     {/* General debts */}
                     <section className="flex min-w-0 flex-col rounded-lg border border-gray-800 bg-gray-900/40 p-4 lg:min-h-0">
@@ -331,7 +362,14 @@ export const BudgetView: React.FC<BudgetViewProps> = () => {
                                 <CreditCard className="h-4 w-4 shrink-0 text-rodez-red" />
                                 <h2 className="truncate text-sm font-semibold text-white">Facturas generales</h2>
                             </div>
-                            <button type="button" onClick={() => setActiveTab('BILLS')} className="shrink-0 rounded px-2 py-1 text-xs text-gray-400 hover:bg-gray-800 hover:text-white">Administrar</button>
+                            <button
+                                type="button"
+                                onClick={() => setNewDebtFormRequest(request => request + 1)}
+                                className="flex shrink-0 items-center gap-1 rounded bg-rodez-red px-2 py-1.5 text-xs font-medium text-white hover:bg-red-600"
+                            >
+                                <Plus className="h-3.5 w-3.5" />
+                                <span>Nueva deuda</span>
+                            </button>
                         </div>
                         {activeDebts.length === 0 ? (
                             <p className="py-6 text-center text-sm text-gray-500">No hay deudas generales activas</p>
@@ -340,7 +378,18 @@ export const BudgetView: React.FC<BudgetViewProps> = () => {
                                 {activeDebts.map(debt => (
                                     <div key={debt.id} className="flex items-center justify-between gap-3 py-2.5">
                                         <span className="min-w-0 truncate text-sm text-gray-200">{debt.name}</span>
-                                        <strong className="whitespace-nowrap text-sm text-red-300">${debt.remainingAmount.toLocaleString('es-CO', { maximumFractionDigits: 0 })}</strong>
+                                        <div className="flex shrink-0 items-center gap-2">
+                                            <strong className="whitespace-nowrap text-sm text-red-300">${debt.remainingAmount.toLocaleString('es-CO', { maximumFractionDigits: 0 })}</strong>
+                                            <button
+                                                type="button"
+                                                onClick={() => void handleDeleteRecurringDebt(debt)}
+                                                className="rounded p-1 text-gray-500 hover:bg-red-500/10 hover:text-red-400"
+                                                title={`Eliminar deuda ${debt.name}`}
+                                                aria-label={`Eliminar deuda ${debt.name}`}
+                                            >
+                                                <Trash2 className="h-3.5 w-3.5" />
+                                            </button>
+                                        </div>
                                     </div>
                                 ))}
                             </div>
@@ -354,7 +403,7 @@ export const BudgetView: React.FC<BudgetViewProps> = () => {
                         <h2 className="mb-1 flex items-center gap-2 text-sm font-semibold text-white"><List className="h-4 w-4 text-rodez-red" /> Distribución 5-5</h2>
                         <div className="divide-y divide-gray-800">
                             {bucketInfo.map(bucket => {
-                                const amount = summary?.monthlyBucketAmounts?.[bucket.id] || 0;
+                                const amount = summary?.bucketBalances?.[bucket.id] || 0;
                                 const percentage = summary?.monthlyBucketPercentages?.[bucket.id] || 0;
                                 return (
                                     <button
@@ -405,14 +454,6 @@ export const BudgetView: React.FC<BudgetViewProps> = () => {
                         <span>Categorías</span>
                     </button>
                     <button
-                        onClick={() => setActiveTab('BILLS')}
-                        className={`px-4 py-2 rounded-md text-sm font-medium transition-colors flex items-center space-x-2 whitespace-nowrap ${activeTab === 'BILLS' ? 'bg-gray-800 text-white shadow-sm' : 'text-gray-400 hover:text-white hover:bg-gray-800/50'
-                            }`}
-                    >
-                        <FileText className="w-4 h-4" />
-                        <span>Facturas</span>
-                    </button>
-                    <button
                         onClick={() => setActiveTab('INVESTMENTS')}
                         className={`px-4 py-2 rounded-md text-sm font-medium transition-colors flex items-center space-x-2 whitespace-nowrap ${activeTab === 'INVESTMENTS' ? 'bg-gray-800 text-white shadow-sm' : 'text-gray-400 hover:text-white hover:bg-gray-800/50'
                             }`}
@@ -426,7 +467,6 @@ export const BudgetView: React.FC<BudgetViewProps> = () => {
                 <div className="min-h-0 flex-1 overflow-y-auto">
                     {activeTab === 'ACCOUNTS' && renderAccountsTab()}
                     {activeTab === 'CATEGORIES' && <CategoriesView />}
-                    {activeTab === 'BILLS' && <BillsView accounts={accounts} onRefresh={loadData} />}
                     {activeTab === 'INVESTMENTS' && (
                         <InvestmentsView
                             accounts={accounts}

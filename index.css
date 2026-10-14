@@ -70,3 +70,25 @@
 .custom-scrollbar::-webkit-scrollbar-thumb:hover {
   background: #4b5563;
 }
+
+@media (max-width: 639px) {
+  .text-xs {
+    font-size: 0.875rem;
+  }
+
+  .text-sm {
+    font-size: 1rem;
+  }
+
+  [class~="text-[9px]"] {
+    font-size: 11px;
+  }
+
+  [class~="text-[10px]"] {
+    font-size: 12px;
+  }
+
+  [class~="text-[11px]"] {
+    font-size: 13px;
+  }
+}
