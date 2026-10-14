@@ -20,7 +20,8 @@ import {
     deleteRecurringDebt,
     getAllRecurringDebts,
     getCategories,
-    deleteAccount
+    deleteAccount,
+    isProtectedRewardsCategory
 } from '../services/budgetService';
 import { useAuth } from '../hooks/useAuth';
 import { AddAccountModal } from './AddAccountModal';
@@ -29,7 +30,6 @@ import { CategoriesView } from './CategoriesView';
 import { BillsView } from './BillsView';
 import { InvestmentsView } from './InvestmentsView';
 import { MonthlyTransactionsModal } from './MonthlyTransactionsModal';
-import { calculateAccruedSavingsYield } from '../utils/savingsYield';
 import { useBrandedConfirm } from './BrandedConfirmDialog';
 import {
     Wallet,
@@ -61,7 +61,6 @@ export const BudgetView: React.FC<BudgetViewProps> = () => {
     const [transactions, setTransactions] = useState<Transaction[]>([]);
     const [categories, setCategories] = useState<Category[]>([]);
     const [recurringDebts, setRecurringDebts] = useState<RecurringDebt[]>([]);
-    const [yieldAsOf, setYieldAsOf] = useState(Date.now());
     const [summary, setSummary] = useState<FinancialSummary | null>(null);
     const [loading, setLoading] = useState(true);
     const [showAddAccount, setShowAddAccount] = useState(false);
@@ -77,11 +76,6 @@ export const BudgetView: React.FC<BudgetViewProps> = () => {
     const [selectedBucket, setSelectedBucket] = useState<BudgetBucket | null>(null);
     const [selectedMonth, setSelectedMonth] = useState(new Date().toISOString().slice(0, 7));
     const [showBucketDetailModal, setShowBucketDetailModal] = useState(false);
-
-    useEffect(() => {
-        const timer = window.setInterval(() => setYieldAsOf(Date.now()), 60_000);
-        return () => window.clearInterval(timer);
-    }, []);
 
     // Load data
     useEffect(() => {
@@ -128,6 +122,7 @@ export const BudgetView: React.FC<BudgetViewProps> = () => {
 
     const handleDeleteAccount = async (account: Account) => {
         if (!user) return;
+        if (account.defaultKey) return;
         const confirmed = await confirmAction({
             title: 'Eliminar cuenta',
             message: `¿Eliminar la cuenta "${account.name}"? Sus movimientos históricos se conservarán, pero esta acción no se puede deshacer.`,
@@ -205,27 +200,28 @@ export const BudgetView: React.FC<BudgetViewProps> = () => {
         }
     };
 
-    const getAccountTypeName = (type: AccountType) => {
-        switch (type) {
-            case AccountType.CASH:
-                return 'Efectivo';
-            case AccountType.BANK:
-                return 'Banco';
-            case AccountType.SAVINGS:
-                return 'Ahorros';
-            case AccountType.CREDIT_CARD:
-                return 'Tarjeta de Crédito';
-            default:
-                return type;
-        }
-    };
+    const getBucketHistoryTransactions = (bucket: BudgetBucket): Transaction[] => transactions
+        .filter(transaction => {
+            if (transaction.isPending && !transaction.isPaid) return false;
+            const transactionDate = new Date(transaction.date);
+            const transactionMonth = `${transactionDate.getFullYear()}-${String(transactionDate.getMonth() + 1).padStart(2, '0')}`;
+            if (transactionMonth !== selectedMonth) return false;
+
+            if (bucket === BudgetBucket.REWARDS) {
+                if (transaction.type !== TransactionType.EXPENSE) return false;
+                const category = categories.find(item => item.id === transaction.categoryId);
+                if (category && isProtectedRewardsCategory(category)) return true;
+                return (transaction.categoryName || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().trim() === 'recompensas';
+            }
+            if (bucket === BudgetBucket.ESSENTIAL) {
+                return transaction.bucketId === BudgetBucket.ESSENTIAL ||
+                    (!transaction.bucketId && transaction.type === TransactionType.EXPENSE);
+            }
+            return transaction.bucketId === bucket;
+        })
+        .sort((a, b) => b.date - a.date);
 
     const renderAccountsTab = () => {
-        const months = [
-            'Enero', 'Febrero', 'Marzo', 'Abril', 'Mayo', 'Junio',
-            'Julio', 'Agosto', 'Septiembre', 'Octubre', 'Noviembre', 'Diciembre'
-        ];
-
         if (loading) {
             return (
                 <div className="flex items-center justify-center py-12">
@@ -235,16 +231,18 @@ export const BudgetView: React.FC<BudgetViewProps> = () => {
         }
 
         const bucketInfo = [
-            { id: BudgetBucket.ESSENTIAL, label: 'Gastos Esenciales', pct: 50, color: 'from-blue-900/40 to-blue-800/20 border-blue-700/30', icon: <DollarSign className="w-5 h-5 text-blue-400" /> },
-            { id: BudgetBucket.INVESTMENT, label: 'Inversión', pct: 25, color: 'from-green-900/40 to-green-800/20 border-green-700/30', icon: <TrendingUp className="w-5 h-5 text-green-400" /> },
-            { id: BudgetBucket.STABILITY, label: 'Fondo Estabilidad', pct: 15, color: 'from-purple-900/40 to-purple-800/20 border-purple-700/30', icon: <PiggyBank className="w-5 h-5 text-purple-400" /> },
-            { id: BudgetBucket.REWARDS, label: 'Recompensas', pct: 10, color: 'from-pink-900/40 to-pink-800/20 border-pink-700/30', icon: <DollarSign className="w-5 h-5 text-pink-400" /> },
+            { id: BudgetBucket.INVESTMENT, label: 'Inversión', icon: <TrendingUp className="h-4 w-4 text-green-400" /> },
+            { id: BudgetBucket.STABILITY, label: 'Fondo de estabilidad', icon: <PiggyBank className="h-4 w-4 text-blue-400" /> },
+            { id: BudgetBucket.REWARDS, label: 'Recompensas', icon: <DollarSign className="h-4 w-4 text-amber-400" /> },
         ];
+        const activeDebts = recurringDebts.filter(debt => debt.isActive);
+        const totalDebtBalance = activeDebts.reduce((total, debt) => total + (Number(debt.remainingAmount) || 0), 0);
 
         return (
-            <div className="space-y-6">
+            <div className="grid grid-cols-1 gap-3 lg:min-h-full lg:grid-cols-12 lg:grid-rows-[auto_auto_auto_auto]">
                 {/* Month Selector & Main Actions */}
-                <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+                <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between lg:col-span-full">
+                    <h1 className="text-lg font-bold text-white">Resumen del mes</h1>
                     <div className="flex items-center space-x-3 bg-gray-900 border border-gray-800 rounded-xl px-4 py-2 w-fit">
                         <Calendar className="w-5 h-5 text-rodez-red" />
                         <input
@@ -256,228 +254,137 @@ export const BudgetView: React.FC<BudgetViewProps> = () => {
                     </div>
                 </div>
 
-                {/* Bucket Dashboard */}
-                <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
-                    {bucketInfo.map((bucket) => {
-                        const balance = summary?.bucketBalances?.[bucket.id] || 0;
-                        return (
-                            <div
-                                key={bucket.id}
-                                onClick={() => {
-                                    setModalInitialBucket(bucket.id);
-                                    setModalLockedBucket(true);
-                                    setShowAddTransaction(true);
-                                }}
-                                className={`bg-gradient-to-br ${bucket.color} border rounded-xl p-4 md:p-5 transition-all hover:scale-[1.02] cursor-pointer hover:border-white/30 group relative shadow-lg`}
-                            >
-                                <div className="flex items-center justify-between mb-3 text-white/70">
-                                    <span className="text-xs font-bold uppercase tracking-wider">{bucket.label} ({bucket.pct}%)</span>
-                                    {bucket.icon}
-                                </div>
-                                <div className="text-2xl font-bold text-white mb-2">
-                                    ${balance.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}
-                                </div>
-                                <div className="flex items-center justify-between pt-2 border-t border-white/10 text-[11px]">
-                                    <span className="text-white font-medium flex items-center group-hover:underline">
-                                        <Plus className="w-3.5 h-3.5 mr-1 text-white" />
-                                        Registrar Gasto
-                                    </span>
-                                    <button
-                                        type="button"
-                                        onClick={(e) => {
-                                            e.stopPropagation();
-                                            setSelectedBucket(bucket.id);
-                                            if (bucket.id === BudgetBucket.INVESTMENT) {
-                                                setActiveTab('INVESTMENTS');
-                                            } else {
-                                                setShowBucketDetailModal(true);
-                                            }
-                                        }}
-                                        className="text-white/60 hover:text-white flex items-center hover:underline transition-colors px-1 py-0.5 rounded"
-                                        title="Ver historial de movimientos"
-                                    >
-                                        <List className="w-3.5 h-3.5 mr-1" />
-                                        Historial
-                                    </button>
-                                </div>
-                            </div>
-                        );
-                    })}
-                </div>
-
-                {/* Financial Summary */}
                 {summary && (
-                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-                        {/* Net Balance */}
-                        <div className={`bg-gradient-to-br ${summary.netBalance >= 0 ? 'from-purple-900/50 to-purple-800/30 border-purple-700/50' : 'from-orange-900/50 to-orange-800/30 border-orange-700/50'} border rounded-xl p-6`}>
-                            <div className="flex items-center justify-between mb-2">
-                                <span className={`${summary.netBalance >= 0 ? 'text-purple-300' : 'text-orange-300'} text-sm font-medium`}>
-                                    Balance Neto
-                                </span>
-                                <TrendingUp className={`w-5 h-5 ${summary.netBalance >= 0 ? 'text-purple-400' : 'text-orange-400'}`} />
+                    <section className="rounded-lg border border-gray-800 bg-gray-900/50 lg:col-span-full">
+                        <h2 className="sr-only">Resumen del mes</h2>
+                        <div className="grid grid-cols-3 gap-1.5 p-1.5 sm:gap-2 sm:p-2">
+                            <div className="flex min-w-0 flex-col justify-between gap-2 rounded-md border border-gray-800 px-2 py-2 sm:px-3">
+                                <span className="flex min-w-0 items-center gap-1 whitespace-nowrap text-[10px] text-gray-300 sm:gap-2 sm:text-sm"><TrendingUp className="hidden h-4 w-4 shrink-0 text-rodez-red sm:block" /><span className="truncate">Balance neto</span></span>
+                                <strong className={`whitespace-nowrap text-[11px] sm:text-lg ${summary.netBalance >= 0 ? 'text-white' : 'text-red-300'}`}>{summary.netBalance >= 0 ? '+' : ''}${summary.netBalance.toLocaleString('es-CO', { maximumFractionDigits: 0 })}</strong>
                             </div>
-                            <div className="text-3xl font-bold text-white">
-                                {summary.netBalance >= 0 ? '+' : ''}${summary.netBalance.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                            </div>
-                        </div>
-
-                        {/* Monthly Expenses */}
-                        <div
-                            onClick={() => {
-                                setMonthlyModalType(TransactionType.EXPENSE);
-                                setShowMonthlyModal(true);
-                            }}
-                            className="bg-gradient-to-br from-red-900/50 to-red-800/30 border border-red-700/50 rounded-xl p-6 cursor-pointer hover:border-red-500 transition-all group relative overflow-hidden"
-                        >
-                            <div className="absolute inset-0 bg-red-500/5 opacity-0 group-hover:opacity-100 transition-opacity"></div>
-                            <div className="flex items-center justify-between mb-2 relative z-10">
-                                <span className="text-red-300 text-sm font-medium group-hover:text-red-200">Gastos del Mes</span>
-                                <ArrowDownRight className="w-5 h-5 text-red-400 group-hover:scale-110 transition-transform" />
-                            </div>
-                            <div className="text-3xl font-bold text-white relative z-10">
-                                -${summary.monthlyExpenses.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                            </div>
-                            <div className="text-xs text-red-400/70 mt-2 flex items-center relative z-10">
-                                <Calendar className="w-3 h-3 mr-1" />
-                                Ver detalle mensual
-                            </div>
-                        </div>
-
-                        {/* Monthly Income */}
-                        <div
-                            onClick={() => {
-                                setMonthlyModalType(TransactionType.INCOME);
-                                setShowMonthlyModal(true);
-                            }}
-                            className="bg-gradient-to-br from-green-900/50 to-green-800/30 border border-green-700/50 rounded-xl p-6 cursor-pointer hover:border-green-500 transition-all group relative overflow-hidden"
-                        >
-                            <div className="absolute inset-0 bg-green-500/5 opacity-0 group-hover:opacity-100 transition-opacity"></div>
-                            <div className="flex items-center justify-between mb-2 relative z-10">
-                                <span className="text-green-300 text-sm font-medium group-hover:text-green-200">Ingresos del Mes</span>
-                                <ArrowUpRight className="w-5 h-5 text-green-400 group-hover:scale-110 transition-transform" />
-                            </div>
-                            <div className="text-3xl font-bold text-white relative z-10">
-                                +${summary.monthlyIncome.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                            </div>
-                            <div className="text-xs text-green-400/70 mt-2 flex items-center relative z-10">
-                                <Calendar className="w-3 h-3 mr-1" />
-                                Ver detalle mensual
-                            </div>
-                        </div>
-
-                        {/* Total Balance */}
-                        <div className="bg-gradient-to-br from-blue-900/50 to-blue-800/30 border border-blue-700/50 rounded-xl p-6">
-                            <div className="flex items-center justify-between mb-2">
-                                <span className="text-blue-300 text-sm font-medium">Balance Total</span>
-                                <DollarSign className="w-5 h-5 text-blue-400" />
-                            </div>
-                            <div className="text-3xl font-bold text-white">
-                                ${summary.totalBalance.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                            </div>
-                        </div>
-                    </div>
-                )}
-
-                {/* Accounts */}
-                <div>
-                    <div className="flex justify-between items-center mb-4">
-                        <h2 className="text-xl font-bold text-white">Cuentas</h2>
-                        <button
-                            onClick={() => setShowAddAccount(true)}
-                            className="text-sm text-rodez-red hover:text-blue-400 transition-colors"
-                        >
-                            + Agregar Cuenta
-                        </button>
-                    </div>
-
-                    {accounts.length === 0 ? (
-                        <div className="bg-gray-900 border border-gray-800 rounded-xl p-8 text-center">
-                            <Wallet className="w-12 h-12 text-gray-600 mx-auto mb-3" />
-                            <p className="text-gray-400">No tienes cuentas registradas</p>
                             <button
-                                onClick={() => setShowAddAccount(true)}
-                                className="mt-4 px-4 py-2 bg-rodez-red hover:bg-blue-600 text-white rounded-lg transition-colors"
+                                type="button"
+                                onClick={() => { setMonthlyModalType(TransactionType.INCOME); setShowMonthlyModal(true); }}
+                                className="flex min-w-0 flex-col justify-between gap-2 rounded-md border border-gray-800 px-2 py-2 text-left transition-colors hover:bg-gray-800/50 sm:px-3"
                             >
-                                Crear Primera Cuenta
+                                <span className="flex min-w-0 items-center gap-1 whitespace-nowrap text-[10px] text-gray-300 sm:gap-2 sm:text-sm"><ArrowUpRight className="hidden h-4 w-4 shrink-0 text-green-400 sm:block" /><span className="truncate"><span className="sm:hidden">Ingresos</span><span className="hidden sm:inline">Ingresos del mes</span></span></span>
+                                <strong className="whitespace-nowrap text-[11px] text-green-300 sm:text-lg">+${summary.monthlyIncome.toLocaleString('es-CO', { maximumFractionDigits: 0 })}</strong>
+                            </button>
+                            <button
+                                type="button"
+                                onClick={() => { setMonthlyModalType(TransactionType.EXPENSE); setShowMonthlyModal(true); }}
+                                className="flex min-w-0 flex-col justify-between gap-2 rounded-md border border-gray-800 px-2 py-2 text-left transition-colors hover:bg-gray-800/50 sm:px-3"
+                            >
+                                <span className="flex min-w-0 items-center gap-1 whitespace-nowrap text-[10px] text-gray-300 sm:gap-2 sm:text-sm"><ArrowDownRight className="hidden h-4 w-4 shrink-0 text-red-400 sm:block" /><span className="truncate"><span className="sm:hidden">Gastos</span><span className="hidden sm:inline">Gastos del mes</span></span></span>
+                                <strong className="whitespace-nowrap text-[11px] text-red-300 sm:text-lg">-${summary.monthlyExpenses.toLocaleString('es-CO', { maximumFractionDigits: 0 })}</strong>
                             </button>
                         </div>
+                    </section>
+                )}
+
+                <section className="rounded-lg border border-gray-800 bg-gray-900/50 p-3 lg:col-span-full">
+                    <div className="mb-1 flex items-center justify-between">
+                        <h2 className="flex items-center gap-2 text-sm font-semibold text-white"><Wallet className="h-4 w-4 text-rodez-red" /> Cuentas</h2>
+                        <button onClick={() => setShowAddAccount(true)} className="rounded p-1 text-gray-400 hover:bg-gray-800 hover:text-white" title="Agregar cuenta" aria-label="Agregar cuenta"><Plus className="h-4 w-4" /></button>
+                    </div>
+                    {accounts.length === 0 ? (
+                        <button onClick={() => setShowAddAccount(true)} className="flex items-center gap-2 py-2 text-xs text-gray-400 hover:text-white"><Plus className="h-4 w-4" /> Crear cuenta</button>
                     ) : (
-                        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                        <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 xl:grid-cols-4">
                             {accounts.map(account => (
-                                <div
-                                    key={account.id}
-                                    onClick={() => {
-                                        setModalInitialAccountId(account.id);
-                                        setModalInitialType(TransactionType.INCOME);
-                                        setModalAllowedTypes([TransactionType.INCOME, TransactionType.TRANSFER]);
-                                        setModalInitialBucket(undefined);
-                                        setModalLockedBucket(false);
-                                        setShowAddTransaction(true);
-                                    }}
-                                    className="bg-gray-900 border border-gray-800 hover:border-rodez-red/50 hover:bg-gray-900/80 rounded-xl p-5 md:p-6 transition-all cursor-pointer group shadow-lg hover:scale-[1.01]"
-                                    title={`Click para registrar ${account.type === AccountType.CREDIT_CARD ? 'abono o transferencia' : 'ingreso o transferencia'} en ${account.name}`}
-                                >
-                                    <div className="flex items-center justify-between mb-4">
-                                        <div className="flex items-center space-x-3">
-                                            <div className={`p-2.5 rounded-xl ${account.color || 'bg-gray-800'} transition-transform group-hover:scale-105`}>
-                                                {getAccountIcon(account.type)}
-                                            </div>
-                                            <div>
-                                                <h3 className="font-bold text-white group-hover:text-rodez-red transition-colors">{account.name}</h3>
-                                                <p className="text-xs text-gray-500">{getAccountTypeName(account.type)}</p>
-                                            </div>
-                                        </div>
-                                        <button
-                                            type="button"
-                                            onClick={(event) => {
-                                                event.stopPropagation();
-                                                void handleDeleteAccount(account);
-                                            }}
-                                            className="rounded p-2 text-gray-500 transition-colors hover:bg-red-500/10 hover:text-red-400"
-                                            title={`Eliminar cuenta ${account.name}`}
-                                            aria-label={`Eliminar cuenta ${account.name}`}
-                                        >
-                                            <Trash2 className="h-4 w-4" />
-                                        </button>
-                                    </div>
-                                    <div className="text-2xl font-bold text-white mb-1">
-                                        {account.type === AccountType.CREDIT_CARD ? 'Deuda actual: ' : ''}${account.balance.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                                    </div>
-                                    {account.type === AccountType.CREDIT_CARD && (
-                                        <div className="mb-3 space-y-1 text-xs">
-                                            <p className="font-medium text-green-400">Disponible: ${(account.creditAvailable || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} / ${(account.creditLimit || 0).toLocaleString()}</p>
-                                            <p className="text-gray-400">Corte: día {account.creditCutoffDay} · Pago: día {account.creditPaymentDueDay}</p>
-                                        </div>
+                                <div key={account.id} className="grid min-w-0 grid-cols-[minmax(0,1fr)_auto_auto] items-center gap-2 rounded-md border border-gray-800 bg-gray-950/50 px-2 py-2">
+                                    <button
+                                        type="button"
+                                        onClick={() => {
+                                            setModalInitialAccountId(account.id);
+                                            setModalInitialType(TransactionType.EXPENSE);
+                                            setModalAllowedTypes([TransactionType.INCOME, TransactionType.EXPENSE, TransactionType.TRANSFER]);
+                                            setModalInitialBucket(undefined);
+                                            setModalLockedBucket(false);
+                                            setShowAddTransaction(true);
+                                        }}
+                                        className="flex min-w-0 items-center gap-2 text-left"
+                                        title={`Registrar movimiento en ${account.name}`}
+                                    >
+                                        <span className="shrink-0 text-gray-300">{getAccountIcon(account.type)}</span>
+                                        <span className="truncate text-xs text-gray-200">{account.name}</span>
+                                    </button>
+                                    <strong className="whitespace-nowrap text-xs text-white">{account.type === AccountType.CREDIT_CARD ? '−' : ''}${Math.abs(account.balance).toLocaleString('es-CO', { maximumFractionDigits: 0 })}</strong>
+                                    {account.defaultKey ? (
+                                        <span className="px-1 text-[10px] text-gray-600" title="Cuenta predeterminada protegida" aria-label="Cuenta predeterminada protegida">Fija</span>
+                                    ) : (
+                                        <button type="button" onClick={() => void handleDeleteAccount(account)} className="rounded p-1 text-gray-500 hover:text-red-400" title={`Eliminar ${account.name}`} aria-label={`Eliminar cuenta ${account.name}`}><Trash2 className="h-3 w-3" /></button>
                                     )}
-                                    {account.type === AccountType.SAVINGS && (account.savingsYieldRateAnnual || 0) > 0 && (
-                                        <div className="mb-3 space-y-1 text-xs">
-                                            <p className="text-gray-400">Tasa: {account.savingsYieldRateAnnual}% E.A.</p>
-                                            <p className="font-medium text-green-400">
-                                                Utilidad estimada: +${calculateAccruedSavingsYield(account, transactions, yieldAsOf).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                                            </p>
-                                        </div>
-                                    )}
-                                    <div className="flex items-center justify-between pt-3 border-t border-gray-800/80 text-[11px] text-gray-400">
-                                        <span className="text-green-400 font-semibold flex items-center group-hover:underline">
-                                            <Plus className="w-3.5 h-3.5 mr-1" />
-                                            {account.type === AccountType.CREDIT_CARD ? 'Abonar / Transferir' : 'Ingreso / Transferir'}
-                                        </span>
-                                        <span className="text-gray-500 uppercase tracking-wider text-[10px] font-bold">{account.currency}</span>
-                                    </div>
                                 </div>
                             ))}
                         </div>
                     )}
-                </div>
+                </section>
 
+                <div className="grid grid-cols-1 gap-3 lg:col-span-full lg:min-h-0 lg:grid-cols-3">
+                    <BillsView accounts={accounts} onRefresh={loadData} mode="monthly" month={selectedMonth} />
+
+                    {/* General debts */}
+                    <section className="flex min-w-0 flex-col rounded-lg border border-gray-800 bg-gray-900/40 p-4 lg:min-h-0">
+                        <div className="mb-2 flex items-center justify-between gap-2">
+                            <div className="flex min-w-0 items-center gap-2">
+                                <CreditCard className="h-4 w-4 shrink-0 text-rodez-red" />
+                                <h2 className="truncate text-sm font-semibold text-white">Facturas generales</h2>
+                            </div>
+                            <button type="button" onClick={() => setActiveTab('BILLS')} className="shrink-0 rounded px-2 py-1 text-xs text-gray-400 hover:bg-gray-800 hover:text-white">Administrar</button>
+                        </div>
+                        {activeDebts.length === 0 ? (
+                            <p className="py-6 text-center text-sm text-gray-500">No hay deudas generales activas</p>
+                        ) : (
+                            <div className="min-h-0 flex-1 divide-y divide-gray-800 overflow-y-auto custom-scrollbar">
+                                {activeDebts.map(debt => (
+                                    <div key={debt.id} className="flex items-center justify-between gap-3 py-2.5">
+                                        <span className="min-w-0 truncate text-sm text-gray-200">{debt.name}</span>
+                                        <strong className="whitespace-nowrap text-sm text-red-300">${debt.remainingAmount.toLocaleString('es-CO', { maximumFractionDigits: 0 })}</strong>
+                                    </div>
+                                ))}
+                            </div>
+                        )}
+                        <div className="mt-2 flex items-center justify-between border-t border-gray-800 pt-2 text-xs text-gray-400">
+                            <span>Saldo pendiente</span>
+                            <strong className="text-white">${totalDebtBalance.toLocaleString('es-CO', { maximumFractionDigits: 0 })}</strong>
+                        </div>
+                    </section>
+                    <section className="flex min-w-0 flex-col rounded-lg border border-gray-800 bg-gray-900/40 p-4 lg:min-h-0">
+                        <h2 className="mb-1 flex items-center gap-2 text-sm font-semibold text-white"><List className="h-4 w-4 text-rodez-red" /> Distribución 5-5</h2>
+                        <div className="divide-y divide-gray-800">
+                            {bucketInfo.map(bucket => {
+                                const amount = summary?.monthlyBucketAmounts?.[bucket.id] || 0;
+                                const percentage = summary?.monthlyBucketPercentages?.[bucket.id] || 0;
+                                return (
+                                    <button
+                                        key={bucket.id}
+                                        type="button"
+                                        onClick={() => { setSelectedBucket(bucket.id); setShowBucketDetailModal(true); }}
+                                        className="grid w-full min-w-0 grid-cols-[minmax(0,1fr)_auto_auto] items-center gap-3 py-2 text-left hover:bg-gray-800/30 sm:grid-cols-[minmax(0,1fr)_auto_auto_auto]"
+                                    >
+                                        <span className="flex min-w-0 items-center gap-2">
+                                            {bucket.icon}
+                                            <span className="truncate text-sm font-medium text-white">{bucket.label} {percentage.toLocaleString('es-CO', { maximumFractionDigits: 1 })}%</span>
+                                        </span>
+                                        <strong className="whitespace-nowrap text-sm text-white">${amount.toLocaleString('es-CO', { maximumFractionDigits: 0 })}</strong>
+                                        <span className="col-span-3 flex items-center justify-end gap-1 px-1 py-1 text-xs text-gray-400 sm:col-span-1" title={`Ver historial de ${bucket.label}`}>
+                                            <List className="h-3.5 w-3.5" /><span>Historial</span>
+                                        </span>
+                                    </button>
+                                );
+                            })}
+                        </div>
+                    </section>
+                </div>
 
             </div>
         );
     };
 
     return (
-        <div className="h-full overflow-y-auto bg-gray-950 p-4 md:p-6">
-            <div className="max-w-7xl mx-auto space-y-6">
+        <div className="h-full min-h-0 overflow-hidden bg-gray-950 p-4 md:p-6">
+            <div className="mx-auto flex h-full min-h-0 max-w-7xl flex-col gap-4">
 
                 {/* Tabs */}
                 <div className="flex space-x-1 bg-gray-900 p-1 rounded-lg w-full md:w-fit overflow-x-auto">
@@ -516,7 +423,7 @@ export const BudgetView: React.FC<BudgetViewProps> = () => {
                 </div>
 
                 {/* Content */}
-                <div className="mt-6">
+                <div className="min-h-0 flex-1 overflow-y-auto">
                     {activeTab === 'ACCOUNTS' && renderAccountsTab()}
                     {activeTab === 'CATEGORIES' && <CategoriesView />}
                     {activeTab === 'BILLS' && <BillsView accounts={accounts} onRefresh={loadData} />}
@@ -599,25 +506,7 @@ export const BudgetView: React.FC<BudgetViewProps> = () => {
 
                         <div className="overflow-y-auto flex-1 bg-gray-950 px-6">
                             <div className="divide-y divide-gray-800">
-                                {transactions
-                                    .filter(t => {
-                                        if (t.isPending && !t.isPaid) return false;
-                                        // Filter by bucket and selected month
-                                        // Use date key or date object to get YYYY-MM
-                                        const tDate = new Date(t.date);
-                                        const tMonthKey = `${tDate.getFullYear()}-${String(tDate.getMonth() + 1).padStart(2, '0')}`;
-
-                                        if (tMonthKey !== selectedMonth) return false;
-
-                                        if (selectedBucket === BudgetBucket.ESSENTIAL) {
-                                            // Essential includes explicit or default expenses
-                                            return t.bucketId === BudgetBucket.ESSENTIAL || (!t.bucketId && t.type === TransactionType.EXPENSE);
-                                        }
-
-                                        return t.bucketId === selectedBucket;
-                                    })
-                                    .sort((a, b) => b.date - a.date)
-                                    .map(t => (
+                                {getBucketHistoryTransactions(selectedBucket).map(t => (
                                         <div key={t.id} className="grid grid-cols-[20px_minmax(0,1fr)_auto] items-center gap-3 py-3 text-sm">
                                             <span className={t.type === TransactionType.INCOME ? 'text-green-400' : 'text-gray-400'} aria-label={t.type === TransactionType.INCOME ? 'Ingreso' : 'Gasto'}>
                                                 {t.type === TransactionType.INCOME ? <ArrowUpRight className="h-4 w-4" /> : <ArrowDownRight className="h-4 w-4" />}
@@ -639,16 +528,7 @@ export const BudgetView: React.FC<BudgetViewProps> = () => {
                                             </div>
                                         </div>
                                     ))}
-                                {transactions.filter(t => {
-                                    if (t.isPending && !t.isPaid) return false;
-                                    const tDate = new Date(t.date);
-                                    const tMonthKey = `${tDate.getFullYear()}-${String(tDate.getMonth() + 1).padStart(2, '0')}`;
-                                    if (tMonthKey !== selectedMonth) return false;
-                                    if (selectedBucket === BudgetBucket.ESSENTIAL) {
-                                        return t.bucketId === BudgetBucket.ESSENTIAL || (!t.bucketId && t.type === TransactionType.EXPENSE);
-                                    }
-                                    return t.bucketId === selectedBucket;
-                                }).length === 0 && (
+                                {getBucketHistoryTransactions(selectedBucket).length === 0 && (
                                     <div className="py-12 text-center text-sm text-gray-500">No hay transacciones registradas en esta cubeta para el mes seleccionado.</div>
                                 )}
                             </div>

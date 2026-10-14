@@ -1,8 +1,8 @@
 import React, { useState, useEffect } from 'react';
 import { Category, Subcategory, TransactionType, BudgetBucket } from '../types';
-import { getCategories, saveCategory, updateCategory, deleteCategory, getEffectiveCategoryBucket } from '../services/budgetService';
+import { getCategories, saveCategory, updateCategory, deleteCategory, getEffectiveCategoryBucket, isProtectedRewardsCategory } from '../services/budgetService';
 import { useAuth } from '../hooks/useAuth';
-import { Plus, Edit2, Trash2, ChevronDown, ChevronRight, Save, X, Check, DollarSign, TrendingUp, PiggyBank, Smile, Layers } from 'lucide-react';
+import { Plus, Edit2, Trash2, ChevronDown, ChevronRight, Save, X, Check, DollarSign, TrendingUp, PiggyBank, Smile } from 'lucide-react';
 import { useBrandedConfirm } from './BrandedConfirmDialog';
 
 const PRESET_COLORS = [
@@ -12,7 +12,7 @@ const PRESET_COLORS = [
     '#FFC107', '#FF9800', '#FF5722', '#795548'
 ];
 
-type CategoryFilterTab = 'ALL' | BudgetBucket.ESSENTIAL | BudgetBucket.INVESTMENT | BudgetBucket.STABILITY | BudgetBucket.REWARDS | 'INCOME';
+type CategoryFilterTab = BudgetBucket.ESSENTIAL | BudgetBucket.INVESTMENT | BudgetBucket.STABILITY | BudgetBucket.REWARDS | 'INCOME';
 
 const BUCKET_CONFIG: Record<BudgetBucket, { label: string; pct: number; color: string; bg: string; border: string }> = {
     [BudgetBucket.ESSENTIAL]: { label: 'Gastos Esenciales', pct: 50, color: 'text-blue-400', bg: 'bg-blue-500/10', border: 'border-blue-500/30' },
@@ -27,7 +27,7 @@ export const CategoriesView: React.FC = () => {
     const { confirm: confirmAction, dialog: confirmDialog } = useBrandedConfirm();
     const [categories, setCategories] = useState<Category[]>([]);
     const [loading, setLoading] = useState(true);
-    const [activeFilterTab, setActiveFilterTab] = useState<CategoryFilterTab>('ALL');
+    const [activeFilterTab, setActiveFilterTab] = useState<CategoryFilterTab>(BudgetBucket.ESSENTIAL);
 
     const [expandedCategories, setExpandedCategories] = useState<Set<string>>(new Set());
     const [editingCategory, setEditingCategory] = useState<string | null>(null);
@@ -37,6 +37,10 @@ export const CategoriesView: React.FC = () => {
 
     const [newSubcategoryName, setNewSubcategoryName] = useState('');
     const [addingSubcategoryTo, setAddingSubcategoryTo] = useState<string | null>(null);
+    const [newSubcategoryIsFixed, setNewSubcategoryIsFixed] = useState(false);
+    const [newSubcategoryAmount, setNewSubcategoryAmount] = useState('');
+    const [newSubcategoryDueDay, setNewSubcategoryDueDay] = useState('15');
+    const [editingFixedSubcategoryId, setEditingFixedSubcategoryId] = useState<string | null>(null);
 
     // Add category state
     const [showAddCategory, setShowAddCategory] = useState(false);
@@ -75,19 +79,24 @@ export const CategoriesView: React.FC = () => {
 
     const handleEditCategory = (category: Category) => {
         setEditingCategory(category.id);
-        setEditingCategoryName(category.name);
+        setEditingCategoryName(isProtectedRewardsCategory(category) ? 'Recompensas' : category.name);
         setEditingCategoryColor(category.color || PRESET_COLORS[0]);
         setEditingCategoryBucket(getEffectiveCategoryBucket(category));
     };
 
     const handleSaveCategory = async (categoryId: string) => {
-        if (!user || !editingCategoryName.trim()) return;
+        const category = categories.find(item => item.id === categoryId);
+        if (!user || !category || !editingCategoryName.trim()) return;
 
         try {
             const updates: Partial<Category> = {
-                name: editingCategoryName.trim(),
+                name: isProtectedRewardsCategory(category)
+                    ? 'Recompensas'
+                    : editingCategoryName.trim(),
                 color: editingCategoryColor,
-                bucketId: editingCategoryBucket
+                bucketId: isProtectedRewardsCategory(category)
+                    ? BudgetBucket.REWARDS
+                    : editingCategoryBucket
             };
 
             await updateCategory(categoryId, updates, user.uid);
@@ -109,12 +118,9 @@ export const CategoriesView: React.FC = () => {
         if (activeFilterTab === 'INCOME') {
             setNewCategoryType(TransactionType.INCOME);
             setNewCategoryBucket(BudgetBucket.ESSENTIAL);
-        } else if (activeFilterTab !== 'ALL') {
-            setNewCategoryType(TransactionType.EXPENSE);
-            setNewCategoryBucket(activeFilterTab);
         } else {
             setNewCategoryType(TransactionType.EXPENSE);
-            setNewCategoryBucket(BudgetBucket.ESSENTIAL);
+            setNewCategoryBucket(activeFilterTab);
         }
         setShowAddCategory(true);
     };
@@ -152,10 +158,22 @@ export const CategoriesView: React.FC = () => {
             const category = categories.find(c => c.id === categoryId);
             if (!category) return;
 
+            const fixedAmount = Number(newSubcategoryAmount);
+            const dueDay = Number(newSubcategoryDueDay);
+            const isFixedExpense = category.type === TransactionType.EXPENSE && newSubcategoryIsFixed;
+            if (isFixedExpense && (
+                !Number.isFinite(fixedAmount) || fixedAmount <= 0 ||
+                !Number.isInteger(dueDay) || dueDay < 1 || dueDay > 31
+            )) {
+                alert('Ingresa un monto fijo y un día de vencimiento entre 1 y 31.');
+                return;
+            }
+
             const newSubcategory: Subcategory = {
                 id: crypto.randomUUID(),
                 name: newSubcategoryName.trim(),
-                isDefault: false
+                isDefault: false,
+                ...(isFixedExpense ? { isFixedExpense: true, fixedAmount, dueDay } : {})
             };
 
             const updatedSubcategories = [...(category.subcategories || []), newSubcategory];
@@ -168,8 +186,43 @@ export const CategoriesView: React.FC = () => {
 
             setNewSubcategoryName('');
             setAddingSubcategoryTo(null);
+            setNewSubcategoryIsFixed(false);
+            setNewSubcategoryAmount('');
+            setNewSubcategoryDueDay('15');
         } catch (error) {
             console.error('Error adding subcategory:', error);
+        }
+    };
+
+    const handleSaveFixedSubcategory = async (category: Category, subcategory: Subcategory) => {
+        if (!user) return;
+        const fixedAmount = Number(newSubcategoryAmount);
+        const dueDay = Number(newSubcategoryDueDay);
+        if (newSubcategoryIsFixed && (
+            !Number.isFinite(fixedAmount) || fixedAmount <= 0 ||
+            !Number.isInteger(dueDay) || dueDay < 1 || dueDay > 31
+        )) {
+            alert('Ingresa un monto fijo y un día de vencimiento entre 1 y 31.');
+            return;
+        }
+
+        const subcategoryData: Subcategory = { ...subcategory };
+        delete subcategoryData.fixedAmount;
+        delete subcategoryData.dueDay;
+        const updatedSubcategory: Subcategory = newSubcategoryIsFixed
+            ? { ...subcategoryData, isFixedExpense: true, fixedAmount, dueDay }
+            : { ...subcategoryData, isFixedExpense: false };
+        const updatedSubcategories = (category.subcategories || []).map(item =>
+            item.id === subcategory.id ? updatedSubcategory : item
+        );
+
+        try {
+            await updateCategory(category.id, { subcategories: updatedSubcategories }, user.uid);
+            setCategories(prev => prev.map(item => item.id === category.id ? { ...item, subcategories: updatedSubcategories } : item));
+            setEditingFixedSubcategoryId(null);
+        } catch (error) {
+            console.error('Error updating fixed expense:', error);
+            alert('No se pudo guardar la configuración del gasto fijo.');
         }
     };
 
@@ -201,6 +254,7 @@ export const CategoriesView: React.FC = () => {
 
     const handleDeleteCategory = async (category: Category) => {
         if (!user) return;
+        if (isProtectedRewardsCategory(category)) return;
         const confirmed = await confirmAction({
             title: 'Eliminar categoría',
             message: `¿Eliminar la categoría "${category.name}"?`,
@@ -219,7 +273,6 @@ export const CategoriesView: React.FC = () => {
 
     // Filter categories based on active tab
     const filteredCategories = categories.filter(category => {
-        if (activeFilterTab === 'ALL') return true;
         if (activeFilterTab === 'INCOME') return category.type === TransactionType.INCOME;
         if (category.type !== TransactionType.EXPENSE) return false;
         return getEffectiveCategoryBucket(category) === activeFilterTab;
@@ -248,17 +301,6 @@ export const CategoriesView: React.FC = () => {
 
             {/* Filter Tabs by Bucket */}
             <div className="flex space-x-2 bg-gray-900/80 p-1.5 rounded-xl border border-gray-800 overflow-x-auto">
-                <button
-                    onClick={() => setActiveFilterTab('ALL')}
-                    className={`px-3 py-1.5 rounded-lg text-xs font-semibold whitespace-nowrap transition-all flex items-center space-x-1.5 ${activeFilterTab === 'ALL'
-                        ? 'bg-gray-800 text-white shadow-sm'
-                        : 'text-gray-400 hover:text-white hover:bg-gray-800/50'
-                        }`}
-                >
-                    <Layers className="w-3.5 h-3.5" />
-                    <span>Todas</span>
-                </button>
-
                 <button
                     onClick={() => setActiveFilterTab(BudgetBucket.ESSENTIAL)}
                     className={`px-3 py-1.5 rounded-lg text-xs font-semibold whitespace-nowrap transition-all flex items-center space-x-1.5 ${activeFilterTab === BudgetBucket.ESSENTIAL
@@ -446,14 +488,19 @@ export const CategoriesView: React.FC = () => {
                                                         type="text"
                                                         value={editingCategoryName}
                                                         onChange={(e) => setEditingCategoryName(e.target.value)}
+                                                        readOnly={isProtectedRewardsCategory(category)}
                                                         className="bg-gray-800 border border-gray-600 rounded px-3 py-1.5 text-white text-sm focus:outline-none focus:border-rodez-red"
                                                         autoFocus
                                                     />
+                                                    {isProtectedRewardsCategory(category) && (
+                                                        <span className="text-xs text-gray-500">Nombre vinculado a Distribución 5-5</span>
+                                                    )}
 
                                                     {isExpense && (
                                                         <select
                                                             value={editingCategoryBucket}
                                                             onChange={(e) => setEditingCategoryBucket(e.target.value as BudgetBucket)}
+                                                            disabled={isProtectedRewardsCategory(category)}
                                                             className="bg-gray-800 border border-gray-600 rounded px-2.5 py-1.5 text-xs text-white"
                                                         >
                                                             <option value={BudgetBucket.ESSENTIAL}>Gastos Esenciales (50%)</option>
@@ -529,7 +576,11 @@ export const CategoriesView: React.FC = () => {
                                                 <button
                                                     onClick={() => {
                                                         setAddingSubcategoryTo(category.id);
+                                                        setEditingFixedSubcategoryId(null);
                                                         setExpandedCategories(prev => new Set(prev).add(category.id));
+                                                        setNewSubcategoryIsFixed(false);
+                                                        setNewSubcategoryAmount('');
+                                                        setNewSubcategoryDueDay('15');
                                                     }}
                                                     className="p-2 text-rodez-red hover:bg-gray-800 rounded-lg transition-colors"
                                                     title="Agregar Subcategoría"
@@ -553,52 +604,101 @@ export const CategoriesView: React.FC = () => {
                                     {expandedCategories.has(category.id) && (
                                         <div className="mt-3 ml-7 pt-3 border-t border-gray-800/80 space-y-2">
                                             {(category.subcategories || []).map(sub => (
-                                                <div key={sub.id} className="flex items-center justify-between py-1.5 px-3 rounded-lg bg-gray-800/40 hover:bg-gray-800 group">
-                                                    <span className="text-gray-300 text-sm font-medium">{sub.name}</span>
-                                                    <button
-                                                        onClick={() => handleDeleteSubcategory(category.id, sub.id)}
-                                                        className="text-gray-500 hover:text-red-400 opacity-0 group-hover:opacity-100 transition-opacity p-1"
-                                                        title="Eliminar subcategoría"
-                                                    >
-                                                        <Trash2 className="w-3.5 h-3.5" />
-                                                    </button>
+                                                <div key={sub.id} className="flex flex-wrap items-center justify-between gap-3 py-1.5 px-3 rounded-lg bg-gray-800/40 hover:bg-gray-800 group">
+                                                    <span className="min-w-0 truncate text-gray-300 text-sm font-medium">{sub.name}</span>
+                                                    {sub.isFixedExpense && <span className="shrink-0 text-xs text-amber-300">Fijo · ${Number(sub.fixedAmount || 0).toLocaleString('es-CO')} · vence día {sub.dueDay}</span>}
+                                                    <span className="flex shrink-0 items-center">
+                                                        {isExpense && <button
+                                                            type="button"
+                                                            onClick={() => {
+                                                                setAddingSubcategoryTo(null);
+                                                                setEditingFixedSubcategoryId(editingFixedSubcategoryId === sub.id ? null : sub.id);
+                                                                setNewSubcategoryIsFixed(Boolean(sub.isFixedExpense));
+                                                                setNewSubcategoryAmount(sub.fixedAmount ? String(sub.fixedAmount) : '');
+                                                                setNewSubcategoryDueDay(String(sub.dueDay || 15));
+                                                            }}
+                                                            className="p-1 text-gray-500 hover:text-amber-300"
+                                                            title="Configurar gasto fijo mensual"
+                                                            aria-label={`Configurar gasto fijo para ${sub.name}`}
+                                                        ><Edit2 className="h-3.5 w-3.5" /></button>}
+                                                        <button
+                                                            onClick={() => handleDeleteSubcategory(category.id, sub.id)}
+                                                            className="p-1 text-gray-500 hover:text-red-400 opacity-0 group-hover:opacity-100 transition-opacity"
+                                                            title="Eliminar subcategoría"
+                                                        >
+                                                            <Trash2 className="w-3.5 h-3.5" />
+                                                        </button>
+                                                    </span>
+                                                    {editingFixedSubcategoryId === sub.id && (
+                                                        <div className="basis-full space-y-2 rounded-md border border-gray-700/70 p-3">
+                                                            <label className="flex items-center gap-2 text-sm text-gray-300">
+                                                                <input type="checkbox" checked={newSubcategoryIsFixed} onChange={event => setNewSubcategoryIsFixed(event.target.checked)} className="accent-red-500" />
+                                                                Gasto fijo mensual
+                                                            </label>
+                                                            {newSubcategoryIsFixed && (
+                                                                <div className="grid grid-cols-2 gap-2">
+                                                                    <label className="text-xs text-gray-400">Monto mensual
+                                                                        <input type="number" min="1" step="1" value={newSubcategoryAmount} onChange={event => setNewSubcategoryAmount(event.target.value)} className="mt-1 w-full rounded border border-gray-700 bg-gray-800 px-2 py-1.5 text-sm text-white" />
+                                                                    </label>
+                                                                    <label className="text-xs text-gray-400">Día de vencimiento
+                                                                        <input type="number" min="1" max="31" step="1" value={newSubcategoryDueDay} onChange={event => setNewSubcategoryDueDay(event.target.value)} className="mt-1 w-full rounded border border-gray-700 bg-gray-800 px-2 py-1.5 text-sm text-white" />
+                                                                    </label>
+                                                                </div>
+                                                            )}
+                                                            <div className="flex justify-end gap-2">
+                                                                <button type="button" onClick={() => setEditingFixedSubcategoryId(null)} className="rounded px-2 py-1 text-xs text-gray-400 hover:text-white">Cancelar</button>
+                                                                <button type="button" onClick={() => handleSaveFixedSubcategory(category, sub)} className="rounded bg-rodez-red px-2 py-1 text-xs font-medium text-white">Guardar</button>
+                                                            </div>
+                                                        </div>
+                                                    )}
                                                 </div>
                                             ))}
 
                                             {addingSubcategoryTo === category.id && (
-                                                <div className="flex items-center space-x-2 pt-2">
-                                                    <input
-                                                        type="text"
-                                                        value={newSubcategoryName}
-                                                        onChange={(e) => setNewSubcategoryName(e.target.value)}
-                                                        placeholder="Nombre de subcategoría..."
-                                                        className="flex-1 bg-gray-800 border border-gray-700 rounded-lg px-3 py-1.5 text-sm text-white focus:outline-none focus:border-rodez-red"
-                                                        autoFocus
-                                                        onKeyDown={(e) => {
-                                                            if (e.key === 'Enter') handleAddSubcategory(category.id);
-                                                            if (e.key === 'Escape') {
-                                                                setAddingSubcategoryTo(null);
-                                                                setNewSubcategoryName('');
-                                                            }
-                                                        }}
-                                                    />
-                                                    <button
-                                                        onClick={() => handleAddSubcategory(category.id)}
-                                                        className="p-1.5 bg-rodez-red text-white rounded-lg hover:bg-blue-600 transition-colors"
-                                                        title="Guardar"
-                                                    >
-                                                        <Save className="w-4 h-4" />
-                                                    </button>
-                                                    <button
-                                                        onClick={() => {
-                                                            setAddingSubcategoryTo(null);
-                                                            setNewSubcategoryName('');
-                                                        }}
-                                                        className="p-1.5 text-gray-400 hover:text-white"
-                                                        title="Cancelar"
-                                                    >
-                                                        <X className="w-4 h-4" />
-                                                    </button>
+                                                <div className="space-y-2 pt-2">
+                                                    <div className="flex items-center gap-2">
+                                                        <input
+                                                            type="text"
+                                                            value={newSubcategoryName}
+                                                            onChange={(e) => setNewSubcategoryName(e.target.value)}
+                                                            placeholder="Nombre de subcategoría..."
+                                                            className="min-w-0 flex-1 bg-gray-800 border border-gray-700 rounded-lg px-3 py-1.5 text-sm text-white focus:outline-none focus:border-rodez-red"
+                                                            autoFocus
+                                                            onKeyDown={(e) => {
+                                                                if (e.key === 'Enter') handleAddSubcategory(category.id);
+                                                                if (e.key === 'Escape') {
+                                                                    setAddingSubcategoryTo(null);
+                                                                    setNewSubcategoryName('');
+                                                                }
+                                                            }}
+                                                        />
+                                                        <button onClick={() => handleAddSubcategory(category.id)} className="p-1.5 bg-rodez-red text-white rounded-lg hover:bg-blue-600 transition-colors" title="Guardar">
+                                                            <Save className="w-4 h-4" />
+                                                        </button>
+                                                        <button onClick={() => { setAddingSubcategoryTo(null); setNewSubcategoryName(''); }} className="p-1.5 text-gray-400 hover:text-white" title="Cancelar">
+                                                            <X className="w-4 h-4" />
+                                                        </button>
+                                                    </div>
+                                                    {category.type === TransactionType.EXPENSE && (
+                                                        <div className="space-y-2 rounded-md border border-gray-700/70 p-3">
+                                                            <label className="flex items-center gap-2 text-sm text-gray-300">
+                                                                <input type="checkbox" checked={newSubcategoryIsFixed} onChange={event => setNewSubcategoryIsFixed(event.target.checked)} className="accent-red-500" />
+                                                                Gasto fijo mensual
+                                                            </label>
+                                                            {newSubcategoryIsFixed && (
+                                                                <div className="grid grid-cols-2 gap-2">
+                                                                    <label className="text-xs text-gray-400">
+                                                                        Monto mensual
+                                                                        <input type="number" min="1" step="1" value={newSubcategoryAmount} onChange={event => setNewSubcategoryAmount(event.target.value)} className="mt-1 w-full rounded border border-gray-700 bg-gray-800 px-2 py-1.5 text-sm text-white" placeholder="Ej. 1200000" />
+                                                                    </label>
+                                                                    <label className="text-xs text-gray-400">
+                                                                        Día de vencimiento
+                                                                        <input type="number" min="1" max="31" step="1" value={newSubcategoryDueDay} onChange={event => setNewSubcategoryDueDay(event.target.value)} className="mt-1 w-full rounded border border-gray-700 bg-gray-800 px-2 py-1.5 text-sm text-white" />
+                                                                    </label>
+                                                                </div>
+                                                            )}
+                                                        </div>
+                                                    )}
                                                 </div>
                                             )}
                                         </div>

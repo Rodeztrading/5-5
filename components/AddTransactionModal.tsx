@@ -149,12 +149,11 @@ export const AddTransactionModal: React.FC<AddTransactionModalProps> = ({
         }
     };
 
-    // Filter categories: For expenses, only show categories that belong to this bucket
+    // Expense buckets are derived from the selected category.
     const availableCategories = categories.filter(c => {
         if (c.type !== type) return false;
-        if (type === TransactionType.EXPENSE) {
-            const catBucket = getEffectiveCategoryBucket(c);
-            return catBucket === bucketId;
+        if (type === TransactionType.EXPENSE && lockedBucket) {
+            return getEffectiveCategoryBucket(c) === bucketId;
         }
         return true;
     });
@@ -173,7 +172,25 @@ export const AddTransactionModal: React.FC<AddTransactionModalProps> = ({
     }, [bucketId, type, categories]);
 
     const selectedCategory = categories.find(c => c.id === selectedCategoryId);
-    const selectedAccount = accounts.find(account => account.id === accountId);
+
+    useEffect(() => {
+        if (type === TransactionType.EXPENSE && !lockedBucket && selectedCategory) {
+            setBucketId(getEffectiveCategoryBucket(selectedCategory));
+        }
+    }, [lockedBucket, selectedCategory, type]);
+
+    const protectedAccountKey = type === TransactionType.EXPENSE
+        ? bucketId === BudgetBucket.INVESTMENT
+            ? 'INVESTMENT'
+            : bucketId === BudgetBucket.STABILITY
+                ? 'STABILITY'
+                : undefined
+        : undefined;
+    const protectedAccount = protectedAccountKey
+        ? accounts.find(account => account.defaultKey === protectedAccountKey)
+        : undefined;
+    const effectiveAccountId = protectedAccount?.id || accountId;
+    const selectedAccount = accounts.find(account => account.id === effectiveAccountId);
 
     // ── Allocation helpers ──────────────────────────────────────────────────
     const parsedAmount = parseFloat(amount) || 0;
@@ -206,7 +223,7 @@ export const AddTransactionModal: React.FC<AddTransactionModalProps> = ({
     // ── Submit ──────────────────────────────────────────────────────────────
     const handleSubmit = async (e: React.FormEvent) => {
         e.preventDefault();
-        if (!amount || !description || !accountId) return;
+        if (!amount || !description || !effectiveAccountId) return;
 
         // For income, validate total doesn't exceed 100%
         if (type === TransactionType.INCOME && totalAllocated > 100) {
@@ -238,7 +255,7 @@ export const AddTransactionModal: React.FC<AddTransactionModalProps> = ({
                 type,
                 amount: parseFloat(amount),
                 description,
-                accountId,
+                accountId: effectiveAccountId,
                 toAccountId: type === TransactionType.TRANSFER ? toAccountId : undefined,
                 date: new Date(date).getTime(),
                 categoryId: type === TransactionType.EXPENSE && selectedCategoryId ? selectedCategoryId : undefined,
@@ -270,7 +287,7 @@ export const AddTransactionModal: React.FC<AddTransactionModalProps> = ({
                         installmentsPaid: 0,
                         categoryId: selectedCategoryId || undefined,
                         subcategoryId: selectedSubcategoryId || undefined,
-                        accountId,
+                        accountId: effectiveAccountId,
                         startDate: new Date(date).getTime(),
                         dueDay: dueDayNumber,
                         isActive: true,
@@ -621,8 +638,8 @@ export const AddTransactionModal: React.FC<AddTransactionModalProps> = ({
                                 </div>
                             </div>
 
-                            {/* Bucket Selection (only visible if not locked) */}
-                            {!lockedBucket && (
+                            {/* Bucket selection for non-expense transaction types */}
+                            {!lockedBucket && type !== TransactionType.EXPENSE && (
                                 <div>
                                     <label className="block text-sm font-medium text-gray-400 mb-2">Distribución (Cubeta)</label>
                                     <div className="grid grid-cols-2 gap-2">
@@ -742,8 +759,9 @@ export const AddTransactionModal: React.FC<AddTransactionModalProps> = ({
                                 {type === TransactionType.TRANSFER ? 'Desde Cuenta' : 'Cuenta'}
                             </label>
                             <select
-                                value={accountId}
+                                value={effectiveAccountId}
                                 onChange={(e) => setAccountId(e.target.value)}
+                                disabled={Boolean(protectedAccount)}
                                 className="w-full bg-gray-800 border border-gray-700 rounded-lg px-4 py-3 text-white focus:ring-2 focus:ring-rodez-red focus:border-transparent outline-none transition-all"
                                 required
                             >
@@ -753,6 +771,11 @@ export const AddTransactionModal: React.FC<AddTransactionModalProps> = ({
                                         </option>
                                     ))}
                             </select>
+                            {protectedAccount && (
+                                <p className="mt-2 text-xs text-gray-500">
+                                    Este gasto se descontará automáticamente de la cuenta protegida {protectedAccount.name}.
+                                </p>
+                            )}
                         </div>
 
                         {type === TransactionType.TRANSFER && (

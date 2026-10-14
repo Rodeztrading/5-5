@@ -11,12 +11,14 @@ import {
     Timestamp,
     writeBatch,
     getDoc,
+    setDoc,
     runTransaction
 } from 'firebase/firestore';
 import { db } from '../config/firebase';
 import {
     Account,
     AccountType,
+    DefaultAccountKey,
     Transaction,
     MonthlyBudget,
     FinancialSummary,
@@ -27,6 +29,76 @@ import {
     RecurringDebt,
     BudgetBucket
 } from '../types';
+
+const DEFAULT_ACCOUNTS: Record<DefaultAccountKey, Pick<Account, 'name' | 'type'>> = {
+    CASH: { name: 'Efectivo', type: AccountType.CASH },
+    INVESTMENT: { name: 'Inversión', type: AccountType.SAVINGS },
+    STABILITY: { name: 'Fondo de Estabilidad', type: AccountType.SAVINGS },
+};
+
+const DEFAULT_BUCKET_ALLOCATIONS: Partial<Record<BudgetBucket, number>> = {
+    [BudgetBucket.ESSENTIAL]: 50,
+    [BudgetBucket.INVESTMENT]: 25,
+    [BudgetBucket.STABILITY]: 15,
+    [BudgetBucket.REWARDS]: 10,
+};
+
+const bucketAccountKey = (bucket: BudgetBucket | undefined): DefaultAccountKey | undefined => {
+    if (bucket === BudgetBucket.INVESTMENT) return 'INVESTMENT';
+    if (bucket === BudgetBucket.STABILITY) return 'STABILITY';
+    return undefined;
+};
+
+const ensureDefaultAccounts = async (userId: string): Promise<void> => {
+    const accountsRef = collection(db, `users/${userId}/accounts`);
+    const snapshot = await getDocs(accountsRef);
+    const existingDocs = snapshot.docs;
+    const normalizeName = (name: unknown) => String(name || '')
+        .normalize('NFD')
+        .replace(/[\u0300-\u036f]/g, '')
+        .toLowerCase()
+        .trim();
+
+    for (const [key, definition] of Object.entries(DEFAULT_ACCOUNTS) as [DefaultAccountKey, typeof DEFAULT_ACCOUNTS[DefaultAccountKey]][]) {
+        const expectedName = normalizeName(definition.name);
+        const existing = existingDocs.find(accountDoc => accountDoc.data().defaultKey === key)
+            || existingDocs.find(accountDoc => {
+                const data = accountDoc.data();
+                if (data.defaultKey) return false;
+                if (normalizeName(data.name) !== expectedName) return false;
+                if (data.type === AccountType.CREDIT_CARD) return false;
+                return key !== 'CASH' || data.type === AccountType.CASH;
+            });
+
+        if (existing) {
+            if (existing.data().defaultKey !== key) {
+                await updateDoc(existing.ref, { defaultKey: key });
+            }
+            continue;
+        }
+
+        const defaultAccountRef = doc(accountsRef, `default-${key.toLowerCase()}`);
+        await runTransaction(db, async firestoreTransaction => {
+            const accountSnapshot = await firestoreTransaction.get(defaultAccountRef);
+            if (!accountSnapshot.exists()) {
+                firestoreTransaction.set(defaultAccountRef, {
+                    ...definition,
+                    balance: 0,
+                    currency: 'COP',
+                    defaultKey: key,
+                    createdAt: Timestamp.fromMillis(Date.now()),
+                });
+            }
+        });
+    }
+};
+
+const getDefaultAccount = async (userId: string, key: DefaultAccountKey): Promise<Account> => {
+    const accounts = await getAllAccounts(userId);
+    const account = accounts.find(item => item.defaultKey === key);
+    if (!account) throw new Error(`No se encontró la cuenta predeterminada ${DEFAULT_ACCOUNTS[key].name}.`);
+    return account;
+};
 
 // ============================================
 // CATEGORIES
@@ -136,20 +208,72 @@ export const getEffectiveCategoryBucket = (category: Category): BudgetBucket => 
     return BudgetBucket.ESSENTIAL;
 };
 
+const normalizeCategoryName = (name: string): string => name
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .trim();
+
+export const isProtectedRewardsCategory = (category: Category): boolean =>
+    category.type === TransactionType.EXPENSE &&
+    normalizeCategoryName(category.name) === 'recompensas';
+
 export const getCategories = async (userId: string): Promise<Category[]> => {
     try {
-        const q = query(collection(db, `users/${userId}/categories`));
-        const querySnapshot = await getDocs(q);
+        const categoriesRef = collection(db, `users/${userId}/categories`);
+        let querySnapshot = await getDocs(query(categoriesRef));
 
         if (querySnapshot.empty) {
             await initializeDefaultCategories(userId);
-            return getCategories(userId); // Retry after init
+            querySnapshot = await getDocs(query(categoriesRef));
         }
 
-        return querySnapshot.docs.map(doc => ({
+        const categories = querySnapshot.docs.map(doc => ({
             ...doc.data(),
             id: doc.id
         } as Category));
+
+        const existingRewardsCategory = categories.find(category =>
+            category.type === TransactionType.EXPENSE &&
+            normalizeCategoryName(category.name) === 'recompensas'
+        ) || categories.find(category =>
+            category.isDefault &&
+            category.type === TransactionType.EXPENSE &&
+            getEffectiveCategoryBucket(category) === BudgetBucket.REWARDS
+        );
+        if (existingRewardsCategory) {
+            const repairs: Partial<Category> = {};
+            if (existingRewardsCategory.name !== 'Recompensas') repairs.name = 'Recompensas';
+            if (existingRewardsCategory.bucketId !== BudgetBucket.REWARDS) repairs.bucketId = BudgetBucket.REWARDS;
+            if (!existingRewardsCategory.isDefault) repairs.isDefault = true;
+            if (Object.keys(repairs).length) {
+                await updateDoc(doc(categoriesRef, existingRewardsCategory.id), repairs);
+                Object.assign(existingRewardsCategory, repairs);
+            }
+        } else {
+            const rewardsCategory: Omit<Category, 'id'> = {
+                name: 'Recompensas',
+                type: TransactionType.EXPENSE,
+                icon: 'Smile',
+                color: '#E91E63',
+                isDefault: true,
+                bucketId: BudgetBucket.REWARDS,
+                subcategories: [
+                    { id: 'gustos', name: 'Gustos Personales', isDefault: true },
+                    { id: 'viajes', name: 'Viajes / Salidas', isDefault: true },
+                    { id: 'ocio', name: 'Ocio / Entretenimiento', isDefault: true },
+                ],
+            };
+            const rewardsCategoryRef = doc(categoriesRef, 'default-rewards');
+            await runTransaction(db, async firestoreTransaction => {
+                const rewardsSnapshot = await firestoreTransaction.get(rewardsCategoryRef);
+                if (!rewardsSnapshot.exists()) firestoreTransaction.set(rewardsCategoryRef, rewardsCategory);
+            });
+            const rewardsSnapshot = await getDoc(rewardsCategoryRef);
+            categories.push({ ...rewardsSnapshot.data(), id: rewardsCategoryRef.id } as Category);
+        }
+
+        return categories;
     } catch (error) {
         console.error('Error getting categories:', error);
         throw new Error('Failed to get categories');
@@ -169,6 +293,17 @@ export const saveCategory = async (category: Omit<Category, 'id'>, userId: strin
 export const updateCategory = async (categoryId: string, updates: Partial<Category>, userId: string): Promise<void> => {
     try {
         const ref = doc(db, `users/${userId}/categories`, categoryId);
+        const categorySnapshot = await getDoc(ref);
+        if (!categorySnapshot.exists()) throw new Error('La categoría no existe.');
+        const category = { ...categorySnapshot.data(), id: categorySnapshot.id } as Category;
+        if (isProtectedRewardsCategory(category)) {
+            if (updates.name !== undefined && updates.name !== 'Recompensas') {
+                throw new Error('El nombre de la categoría Recompensas está vinculado a Distribución 5-5 y no se puede cambiar.');
+            }
+            if (updates.bucketId !== undefined && updates.bucketId !== BudgetBucket.REWARDS) {
+                throw new Error('La categoría Recompensas debe permanecer vinculada a su cubeta.');
+            }
+        }
         await updateDoc(ref, updates);
     } catch (error) {
         console.error('Error updating category:', error);
@@ -179,6 +314,12 @@ export const updateCategory = async (categoryId: string, updates: Partial<Catego
 export const deleteCategory = async (categoryId: string, userId: string): Promise<void> => {
     try {
         const ref = doc(db, `users/${userId}/categories`, categoryId);
+        const categorySnapshot = await getDoc(ref);
+        if (!categorySnapshot.exists()) return;
+        const category = { ...categorySnapshot.data(), id: categorySnapshot.id } as Category;
+        if (isProtectedRewardsCategory(category)) {
+            throw new Error('La categoría Recompensas está vinculada a Distribución 5-5 y no se puede eliminar.');
+        }
         await deleteDoc(ref);
     } catch (error) {
         console.error('Error deleting category:', error);
@@ -190,7 +331,7 @@ export const deleteCategory = async (categoryId: string, userId: string): Promis
 // ACCOUNTS
 // ============================================
 
-export const createAccount = async (account: Omit<Account, 'id' | 'createdAt'>, userId: string): Promise<Account> => {
+export const createAccount = async (account: Omit<Account, 'id' | 'createdAt' | 'defaultKey'>, userId: string): Promise<Account> => {
     try {
         const accountData = {
             ...account,
@@ -212,6 +353,7 @@ export const createAccount = async (account: Omit<Account, 'id' | 'createdAt'>, 
 
 export const getAllAccounts = async (userId: string): Promise<Account[]> => {
     try {
+        await ensureDefaultAccounts(userId);
         const q = query(collection(db, `users/${userId}/accounts`), orderBy('createdAt', 'asc'));
         const querySnapshot = await getDocs(q);
 
@@ -233,7 +375,7 @@ export const getAllAccounts = async (userId: string): Promise<Account[]> => {
 
 export const updateAccount = async (
     accountId: string,
-    updates: Partial<Omit<Account, 'id' | 'createdAt'>>,
+    updates: Partial<Omit<Account, 'id' | 'createdAt' | 'defaultKey'>>,
     userId: string
 ): Promise<void> => {
     try {
@@ -248,6 +390,11 @@ export const updateAccount = async (
 export const deleteAccount = async (accountId: string, userId: string): Promise<void> => {
     try {
         const accountRef = doc(db, `users/${userId}/accounts`, accountId);
+        const accountSnapshot = await getDoc(accountRef);
+        if (!accountSnapshot.exists()) return;
+        if (accountSnapshot.data().defaultKey) {
+            throw new Error('Las cuentas predeterminadas no se pueden eliminar.');
+        }
         await deleteDoc(accountRef);
     } catch (error) {
         console.error('Error deleting account:', error);
@@ -267,13 +414,58 @@ export const createTransaction = async (
         if (!Number.isFinite(transaction.amount) || transaction.amount <= 0) {
             throw new Error('El monto debe ser mayor que cero.');
         }
+        if (transaction.type === TransactionType.INCOME && !transaction.isInvestmentReturn && transaction.bucketAllocations) {
+            const allocationPercentages = Object.values(transaction.bucketAllocations);
+            const allocationTotal = allocationPercentages.reduce((total, percentage) => total + (Number(percentage) || 0), 0);
+            if (allocationPercentages.some(percentage => !Number.isFinite(percentage) || percentage < 0 || percentage > 100) || allocationTotal > 100) {
+                throw new Error('Los porcentajes deben estar entre 0 y 100 y sumar como máximo 100%.');
+            }
+        }
+
+        let effectiveAccountId = transaction.accountId;
+        const expenseAccountKey = transaction.type === TransactionType.EXPENSE
+            ? bucketAccountKey(transaction.bucketId)
+            : undefined;
+        const destinationAccounts = new Map<DefaultAccountKey, Account>();
+        if (expenseAccountKey) {
+            const account = await getDefaultAccount(userId, expenseAccountKey);
+            destinationAccounts.set(expenseAccountKey, account);
+            effectiveAccountId = account.id;
+        }
+
+        const bucketTransfers = new Map<DefaultAccountKey, number>();
+        if (transaction.type === TransactionType.INCOME) {
+            if (transaction.isInvestmentReturn) {
+                bucketTransfers.set('INVESTMENT', transaction.amount);
+            } else {
+                for (const key of ['INVESTMENT', 'STABILITY'] as const) {
+                    const bucket = key === 'INVESTMENT' ? BudgetBucket.INVESTMENT : BudgetBucket.STABILITY;
+                    const percentage = transaction.bucketAllocations
+                        ? transaction.bucketAllocations[bucket] ?? 0
+                        : DEFAULT_BUCKET_ALLOCATIONS[bucket] ?? 0;
+                    const allocationAmount = transaction.amount * percentage / 100;
+                    if (allocationAmount > 0) bucketTransfers.set(key, allocationAmount);
+                }
+            }
+            for (const key of bucketTransfers.keys()) {
+                if (!destinationAccounts.has(key)) {
+                    destinationAccounts.set(key, await getDefaultAccount(userId, key));
+                }
+            }
+        }
+
+        const transfersFromSource = Array.from(bucketTransfers, ([key, amount]) => {
+            const account = destinationAccounts.get(key);
+            if (!account) throw new Error(`No se encontró la cuenta protegida ${DEFAULT_ACCOUNTS[key].name}.`);
+            return { account, amount };
+        });
 
         // Remove undefined fields to avoid Firestore errors
         const cleanTransaction: any = {
             type: transaction.type,
             amount: transaction.amount,
             description: transaction.description,
-            accountId: transaction.accountId,
+            accountId: effectiveAccountId,
             date: Timestamp.fromMillis(transaction.date),
             isPaid: transaction.isPaid || false,
             createdAt: Timestamp.fromMillis(Date.now()),
@@ -292,10 +484,12 @@ export const createTransaction = async (
         if (transaction.bucketAllocations) cleanTransaction.bucketAllocations = transaction.bucketAllocations;
 
         const transactionRef = doc(collection(db, `users/${userId}/transactions`));
-        const accountRef = doc(db, `users/${userId}/accounts`, transaction.accountId);
+        const accountRef = doc(db, `users/${userId}/accounts`, effectiveAccountId);
         const toAccountRef = transaction.toAccountId
             ? doc(db, `users/${userId}/accounts`, transaction.toAccountId)
             : undefined;
+        const distributionRefs = Array.from(new Set(transfersFromSource.map(transfer => transfer.account.id)))
+            .map(id => doc(db, `users/${userId}/accounts`, id));
 
         await runTransaction(db, async firestoreTransaction => {
             const shouldUpdateBalance = !transaction.isPending || transaction.isPaid;
@@ -305,6 +499,15 @@ export const createTransaction = async (
             const toAccountSnapshot = transaction.type === TransactionType.TRANSFER && toAccountRef
                 ? await firestoreTransaction.get(toAccountRef)
                 : undefined;
+            const distributionSnapshots = new Map<string, Awaited<ReturnType<typeof firestoreTransaction.get>>>();
+            for (const distributionRef of distributionRefs) {
+                if (distributionRef.path !== accountRef.path) {
+                    distributionSnapshots.set(
+                        distributionRef.id,
+                        await firestoreTransaction.get(distributionRef)
+                    );
+                }
+            }
 
             if (shouldUpdateBalance && !accountSnapshot?.exists()) {
                 throw new Error('La cuenta seleccionada no existe. No se pudo completar la transacción.');
@@ -316,6 +519,9 @@ export const createTransaction = async (
             const currentBalance = Number(accountSnapshot?.data()?.balance) || 0;
             const accountData = accountSnapshot?.data();
             const isCreditCard = accountData?.type === AccountType.CREDIT_CARD;
+            if (transaction.type === TransactionType.INCOME && isCreditCard && transfersFromSource.some(transfer => transfer.account.id !== effectiveAccountId)) {
+                throw new Error('Para distribuir ingresos a Inversión o Estabilidad, selecciona una cuenta de efectivo, banco o ahorro, no una tarjeta de crédito.');
+            }
             const currentCreditAvailable = Number(accountData?.creditAvailable ?? (Number(accountData?.creditLimit) - currentBalance)) || 0;
             const spendsFromAccount = transaction.type === TransactionType.EXPENSE || transaction.type === TransactionType.TRANSFER;
             const spendableBalance = isCreditCard ? currentCreditAvailable : currentBalance;
@@ -359,12 +565,28 @@ export const createTransaction = async (
                     });
                 } else {
                     if (transaction.type === TransactionType.INCOME) {
-                        newBalance += transaction.amount;
+                        const amountMovedOut = transfersFromSource
+                            .filter(transfer => transfer.account.id !== effectiveAccountId)
+                            .reduce((sum, transfer) => sum + transfer.amount, 0);
+                        newBalance += transaction.amount - amountMovedOut;
                     } else if (spendsFromAccount) {
                         newBalance -= transaction.amount;
                     }
                     firestoreTransaction.update(accountRef, { balance: newBalance });
                 }
+
+                transfersFromSource.forEach(transfer => {
+                    if (transfer.account.id === effectiveAccountId) return;
+                    const targetSnapshot = distributionSnapshots.get(transfer.account.id);
+                    if (!targetSnapshot?.exists()) {
+                        throw new Error(`No se encontró la cuenta protegida ${transfer.account.name}.`);
+                    }
+                    const targetBalance = Number(targetSnapshot.data().balance) || 0;
+                    firestoreTransaction.update(
+                        doc(db, `users/${userId}/accounts`, transfer.account.id),
+                        { balance: targetBalance + transfer.amount }
+                    );
+                });
 
                 if (transaction.type === TransactionType.TRANSFER && toAccountRef && toAccountSnapshot?.exists()) {
                     const destinationData = toAccountSnapshot.data();
@@ -386,6 +608,7 @@ export const createTransaction = async (
 
         return {
             ...transaction,
+            accountId: effectiveAccountId,
             id: transactionRef.id,
             createdAt: Date.now(),
         };
@@ -512,6 +735,24 @@ export const deleteTransaction = async (transactionId: string, userId: string): 
     }
 };
 
+export const deletePendingBill = async (transactionId: string, userId: string): Promise<void> => {
+    const billRef = doc(db, `users/${userId}/transactions`, transactionId);
+    await runTransaction(db, async firestoreTransaction => {
+        const billSnapshot = await firestoreTransaction.get(billRef);
+        if (!billSnapshot.exists()) throw new Error('La factura ya no existe.');
+
+        const bill = billSnapshot.data();
+        if (bill.recurringDebtId) throw new Error('Elimina esta cuota desde su factura general.');
+        if (!bill.isPending || bill.isPaid) throw new Error('Solo puedes eliminar facturas pendientes.');
+
+        firestoreTransaction.delete(billRef);
+        if (bill.fixedExpenseId) {
+            const skipRef = doc(db, `users/${userId}/fixedExpenseSkips`, transactionId);
+            firestoreTransaction.set(skipRef, { createdAt: Timestamp.fromMillis(Date.now()) });
+        }
+    });
+};
+
 // ============================================
 // FINANCIAL SUMMARY
 // ============================================
@@ -548,6 +789,51 @@ export const getFinancialSummary = async (userId: string, month?: string): Promi
         const monthlyExpenses = activeMonthly
             .filter(t => t.type === TransactionType.EXPENSE)
             .reduce((sum, t) => sum + t.amount, 0);
+
+        const categories = await getCategories(userId);
+        const rewardsCategoryIds = new Set(categories
+            .filter(isProtectedRewardsCategory)
+            .map(category => category.id));
+        const monthlyBucketAmounts: Record<BudgetBucket, number> = {
+            [BudgetBucket.ESSENTIAL]: 0,
+            [BudgetBucket.INVESTMENT]: 0,
+            [BudgetBucket.STABILITY]: 0,
+            [BudgetBucket.REWARDS]: 0,
+            [BudgetBucket.OTHER]: 0,
+        };
+        activeMonthly
+            .filter(t => t.type === TransactionType.INCOME)
+            .forEach(t => {
+                if (t.isInvestmentReturn) {
+                    monthlyBucketAmounts[BudgetBucket.INVESTMENT] += t.amount;
+                    return;
+                }
+                for (const bucket of Object.values(BudgetBucket)) {
+                    const percentage = t.bucketAllocations
+                        ? t.bucketAllocations[bucket] ?? 0
+                        : DEFAULT_BUCKET_ALLOCATIONS[bucket] ?? 0;
+                    monthlyBucketAmounts[bucket] += t.amount * percentage / 100;
+                }
+            });
+        monthlyBucketAmounts[BudgetBucket.REWARDS] = activeMonthly
+            .filter(t => {
+                if (t.type !== TransactionType.EXPENSE) return false;
+                if (t.categoryId && rewardsCategoryIds.has(t.categoryId)) return true;
+                return normalizeCategoryName(t.categoryName || '') === 'recompensas';
+            })
+            .reduce((sum, transaction) => sum + transaction.amount, 0);
+        const monthlyBucketPercentages: Record<BudgetBucket, number> = {
+            [BudgetBucket.ESSENTIAL]: 0,
+            [BudgetBucket.INVESTMENT]: 0,
+            [BudgetBucket.STABILITY]: 0,
+            [BudgetBucket.REWARDS]: 0,
+            [BudgetBucket.OTHER]: 0,
+        };
+        if (monthlyIncome > 0) {
+            for (const bucket of Object.values(BudgetBucket)) {
+                monthlyBucketPercentages[bucket] = monthlyBucketAmounts[bucket] / monthlyIncome * 100;
+            }
+        }
 
         const netBalance = monthlyIncome - monthlyExpenses;
 
@@ -610,6 +896,8 @@ export const getFinancialSummary = async (userId: string, month?: string): Promi
             monthlyExpenses,
             netBalance,
             pendingBillsAmount,
+            monthlyBucketAmounts,
+            monthlyBucketPercentages,
             expensesByCategory: [],
             bucketBalances
         };
@@ -811,8 +1099,78 @@ export const ensureRecurringDebtBills = async (userId: string): Promise<void> =>
     }
 };
 
+export const ensureFixedExpenseBills = async (userId: string): Promise<void> => {
+    const [categories, accounts] = await Promise.all([getCategories(userId), getAllAccounts(userId)]);
+    const defaultAccount = accounts[0];
+    if (!defaultAccount) return;
+
+    const targetMonths = [0, 1].map(offset => {
+        const date = new Date();
+        date.setDate(1);
+        date.setMonth(date.getMonth() + offset);
+        return date;
+    });
+    const pendingWrites: { ref: ReturnType<typeof doc>; data: Record<string, unknown> }[] = [];
+
+    for (const category of categories) {
+        if (category.type !== TransactionType.EXPENSE) continue;
+
+        for (const subcategory of category.subcategories || []) {
+            const amount = Number(subcategory.fixedAmount);
+            const dueDay = Number(subcategory.dueDay);
+            if (!subcategory.isFixedExpense || !Number.isFinite(amount) || amount <= 0 || dueDay < 1 || dueDay > 31) continue;
+
+            for (const targetMonth of targetMonths) {
+                const year = targetMonth.getFullYear();
+                const month = targetMonth.getMonth();
+                const monthKey = `${year}-${String(month + 1).padStart(2, '0')}`;
+                const lastDay = new Date(year, month + 1, 0).getDate();
+                const dueDate = new Date(year, month, Math.min(dueDay, lastDay), 12, 0, 0);
+                const billId = `fixed_${subcategory.id}_${monthKey}`;
+                const billRef = doc(db, `users/${userId}/transactions`, billId);
+                const skipRef = doc(db, `users/${userId}/fixedExpenseSkips`, billId);
+                const [billSnapshot, skipSnapshot] = await Promise.all([getDoc(billRef), getDoc(skipRef)]);
+                if (skipSnapshot.exists()) continue;
+                const existingBill = billSnapshot.exists() ? billSnapshot.data() : null;
+
+                if (!existingBill || (existingBill.isPending && !existingBill.isPaid)) {
+                    pendingWrites.push({
+                        ref: billRef,
+                        data: {
+                            type: TransactionType.EXPENSE,
+                            amount,
+                            description: subcategory.name,
+                            accountId: defaultAccount.id,
+                            categoryId: category.id,
+                            subcategoryId: subcategory.id,
+                            fixedExpenseId: subcategory.id,
+                            categoryName: category.name,
+                            bucketId: getEffectiveCategoryBucket(category),
+                            date: Timestamp.fromDate(dueDate),
+                            dueDate: Timestamp.fromDate(dueDate),
+                            isPaid: false,
+                            isPending: true,
+                            createdAt: existingBill?.createdAt || Timestamp.fromMillis(Date.now()),
+                        },
+                    });
+                }
+            }
+        }
+    }
+
+    for (let offset = 0; offset < pendingWrites.length; offset += 450) {
+        const batch = writeBatch(db);
+        pendingWrites.slice(offset, offset + 450).forEach(({ ref, data }) => batch.set(ref, data));
+        await batch.commit();
+    }
+};
+
 export const payPendingBill = async (transactionId: string, paymentAccountId: string, userId: string): Promise<void> => {
     const billRef = doc(db, `users/${userId}/transactions`, transactionId);
+    const defaultAccounts = await getAllAccounts(userId);
+    const defaultAccountsByKey = new Map(defaultAccounts
+        .filter(account => account.defaultKey)
+        .map(account => [account.defaultKey as DefaultAccountKey, account]));
 
     await runTransaction(db, async firestoreTransaction => {
         const billSnapshot = await firestoreTransaction.get(billRef);
@@ -821,7 +1179,13 @@ export const payPendingBill = async (transactionId: string, paymentAccountId: st
         const bill = billSnapshot.data();
         if (!bill.isPending || bill.isPaid) throw new Error('Esta factura ya fue pagada.');
 
-        const accountRef = doc(db, `users/${userId}/accounts`, paymentAccountId);
+        const routedAccountKey = bucketAccountKey(bill.bucketId as BudgetBucket | undefined);
+        const paymentAccount = routedAccountKey ? defaultAccountsByKey.get(routedAccountKey) : undefined;
+        if (routedAccountKey && !paymentAccount) {
+            throw new Error('No se encontró la cuenta protegida para esta cubeta.');
+        }
+        const effectivePaymentAccountId = paymentAccount?.id || paymentAccountId;
+        const accountRef = doc(db, `users/${userId}/accounts`, effectivePaymentAccountId);
         const accountSnapshot = await firestoreTransaction.get(accountRef);
         if (!accountSnapshot.exists()) throw new Error('No se encontró la cuenta asociada a esta factura.');
 
@@ -853,7 +1217,7 @@ export const payPendingBill = async (transactionId: string, paymentAccountId: st
         firestoreTransaction.update(billRef, {
             isPaid: true,
             isPending: false,
-            accountId: paymentAccountId,
+            accountId: effectivePaymentAccountId,
         });
 
         if (debtRef && debtSnapshot?.exists()) {

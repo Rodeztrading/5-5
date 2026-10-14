@@ -1,10 +1,12 @@
 // BillsView.tsx - Gestión de facturas y deudas simples
 import React, { useState, useEffect } from 'react';
-import { Transaction, Account, AccountType, RecurringDebt } from '../types';
+import { Transaction, Account, AccountType, BudgetBucket, RecurringDebt } from '../types';
 import {
     createRecurringDebt,
     deleteRecurringDebt,
+    deletePendingBill,
     ensureRecurringDebtBills,
+    ensureFixedExpenseBills,
     getAllRecurringDebts,
     getAllTransactions,
     payPendingBill,
@@ -16,9 +18,11 @@ import { useBrandedConfirm } from './BrandedConfirmDialog';
 interface BillsViewProps {
     accounts: Account[];
     onRefresh: () => void;
+    mode?: 'full' | 'monthly';
+    month?: string;
 }
 
-export const BillsView: React.FC<BillsViewProps> = ({ accounts, onRefresh }) => {
+export const BillsView: React.FC<BillsViewProps> = ({ accounts, onRefresh, mode = 'full', month }) => {
     const { user } = useAuth();
     const { confirm: confirmAction, dialog: confirmDialog } = useBrandedConfirm();
     const [pendingBills, setPendingBills] = useState<Transaction[]>([]);
@@ -28,6 +32,7 @@ export const BillsView: React.FC<BillsViewProps> = ({ accounts, onRefresh }) => 
     const [billToPay, setBillToPay] = useState<Transaction | null>(null);
     const [paymentAccountId, setPaymentAccountId] = useState('');
     const [payingBill, setPayingBill] = useState(false);
+    const [deletingBillId, setDeletingBillId] = useState<string | null>(null);
 
     // Form state
     const [debtName, setDebtName] = useState('');
@@ -51,7 +56,7 @@ export const BillsView: React.FC<BillsViewProps> = ({ accounts, onRefresh }) => 
         if (!user) return;
         try {
             setLoading(true);
-            await ensureRecurringDebtBills(user.uid);
+            await Promise.all([ensureRecurringDebtBills(user.uid), ensureFixedExpenseBills(user.uid)]);
             const [transactions, debtData] = await Promise.all([
                 getAllTransactions(user.uid),
                 getAllRecurringDebts(user.uid),
@@ -67,10 +72,10 @@ export const BillsView: React.FC<BillsViewProps> = ({ accounts, onRefresh }) => 
     };
 
     const handlePayBill = async () => {
-        if (!user || !billToPay || !paymentAccountId) return;
+        if (!user || !billToPay || !effectivePaymentAccountId) return;
         try {
             setPayingBill(true);
-            await payPendingBill(billToPay.id, paymentAccountId, user.uid);
+            await payPendingBill(billToPay.id, effectivePaymentAccountId, user.uid);
             setBillToPay(null);
             await loadData();
             onRefresh();
@@ -85,6 +90,28 @@ export const BillsView: React.FC<BillsViewProps> = ({ accounts, onRefresh }) => 
     const openPaymentDialog = (bill: Transaction) => {
         setBillToPay(bill);
         setPaymentAccountId(bill.accountId || accounts[0]?.id || '');
+    };
+
+    const handleDeleteBill = async (bill: Transaction) => {
+        if (!user || bill.recurringDebtId) return;
+        const confirmed = await confirmAction({
+            title: 'Eliminar factura pendiente',
+            message: `¿Eliminar la factura "${bill.description}" por $${bill.amount.toLocaleString()}? Esta acción no se puede deshacer.`,
+            confirmLabel: 'Eliminar factura',
+        });
+        if (!confirmed) return;
+
+        try {
+            setDeletingBillId(bill.id);
+            await deletePendingBill(bill.id, user.uid);
+            await loadData();
+            onRefresh();
+        } catch (error) {
+            console.error('Error eliminando factura', error);
+            alert(error instanceof Error ? error.message : 'No se pudo eliminar la factura.');
+        } finally {
+            setDeletingBillId(null);
+        }
     };
 
     const handleAddDebt = async () => {
@@ -147,50 +174,83 @@ export const BillsView: React.FC<BillsViewProps> = ({ accounts, onRefresh }) => 
         }
     };
 
-    const totalPendingBills = pendingBills.reduce((a, b) => a + b.amount, 0);
+    const displayedBills = mode === 'monthly' && month
+        ? pendingBills.filter(bill => {
+            const billDate = new Date(bill.date);
+            return `${billDate.getFullYear()}-${String(billDate.getMonth() + 1).padStart(2, '0')}` === month;
+        })
+        : pendingBills;
+    const totalPendingBills = displayedBills.reduce((a, b) => a + b.amount, 0);
     const totalDebts = debts.reduce((sum, debt) => sum + (Number(debt.remainingAmount) || 0), 0);
     const scheduledTotal = (Number(monthlyPayment) || 0) * (Number(totalInstallments) || 0);
-    const selectedPaymentAccount = accounts.find(account => account.id === paymentAccountId);
+    const protectedPaymentKey = billToPay?.bucketId === BudgetBucket.INVESTMENT
+        ? 'INVESTMENT'
+        : billToPay?.bucketId === BudgetBucket.STABILITY
+            ? 'STABILITY'
+            : undefined;
+    const protectedPaymentAccount = protectedPaymentKey
+        ? accounts.find(account => account.defaultKey === protectedPaymentKey)
+        : undefined;
+    const effectivePaymentAccountId = protectedPaymentAccount?.id || paymentAccountId;
+    const selectedPaymentAccount = accounts.find(account => account.id === effectivePaymentAccountId);
     const paymentAvailable = selectedPaymentAccount?.type === AccountType.CREDIT_CARD
         ? Number(selectedPaymentAccount.creditAvailable) || 0
         : selectedPaymentAccount?.balance || 0;
     const hasEnoughBalance = !!selectedPaymentAccount && paymentAvailable >= (billToPay?.amount || 0);
 
     return (
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+        <div className={mode === 'monthly' ? 'min-w-0 rounded-lg border border-gray-800 bg-gray-900/40 p-4' : 'grid grid-cols-1 gap-6 md:grid-cols-2'}>
             {/* Facturas */}
-            <div className="min-w-0 rounded-lg border border-gray-700 bg-gray-800/70 p-4 sm:p-6">
+            <div className={mode === 'monthly' ? 'flex min-w-0 flex-col' : 'min-w-0 rounded-lg border border-gray-700 bg-gray-800/70 p-4 sm:p-6'}>
                 <div className="mb-3 flex flex-wrap items-center justify-between gap-3 border-b border-gray-700/70 pb-4">
                     <div>
-                        <h2 className="text-xl font-bold text-white flex items-center">
-                            <AlertCircle className="w-5 h-5 mr-2 text-yellow-500" /> Facturas Pendientes
+                        <h2 className={`${mode === 'monthly' ? 'text-sm' : 'text-xl'} flex items-center font-semibold text-white`}>
+                            <AlertCircle className="w-5 h-5 mr-2 text-yellow-500" /> {mode === 'monthly' ? 'Gastos del mes' : 'Facturas Pendientes'}
                         </h2>
-                        <p className="text-sm text-gray-400 mt-1">Pagos pendientes de este mes</p>
+                        <p className="text-sm text-gray-400 mt-1">{mode === 'monthly' ? 'Pagos pendientes del mes seleccionado' : 'Pagos pendientes de este mes'}</p>
                     </div>
                     <div className="text-right">
                         <p className="text-sm text-gray-400">Total por Pagar</p>
-                        <p className="text-2xl font-bold text-red-400">${totalPendingBills.toLocaleString()}</p>
+                        <p className={`${mode === 'monthly' ? 'text-base' : 'text-2xl'} font-bold text-red-400`}>${totalPendingBills.toLocaleString('es-CO', { maximumFractionDigits: 0 })}</p>
                     </div>
                 </div>
                 {loading ? (
                     <div className="text-center py-8 text-gray-500">Cargando facturas...</div>
-                ) : pendingBills.length === 0 ? (
+                ) : displayedBills.length === 0 ? (
                     <div className="text-center py-8 text-gray-500">
                         <Check className="w-12 h-12 mx-auto mb-2 text-green-500" />
-                        <p>No tienes facturas pendientes</p>
-                        <p className="text-sm mt-2 text-gray-600">Crea una transacción de tipo "Gasto" y marca "Pendiente de Pago"</p>
+                        <p>{mode === 'monthly' ? 'No hay pagos pendientes este mes' : 'No tienes facturas pendientes'}</p>
+                        {mode === 'full' && <p className="text-sm mt-2 text-gray-600">Crea una transacción de tipo "Gasto" y marca "Pendiente de Pago"</p>}
                     </div>
                 ) : (
                     <div className="divide-y divide-gray-700/70">
-                        {pendingBills.map(bill => (
+                        {displayedBills.map(bill => {
+                            const dueDate = bill.dueDate || bill.date;
+                            const dueDateMillis = typeof dueDate === 'object' && dueDate !== null
+                                ? (dueDate as any).toMillis()
+                                : dueDate;
+                            return (
                             <div key={bill.id} className="grid min-w-0 grid-cols-[minmax(0,1fr)_auto] items-center gap-x-3 gap-y-2 py-3 first:pt-1 last:pb-1">
                                 <div className="flex min-w-0 items-start gap-3">
-                                    <AlertCircle className="mt-0.5 h-4 w-4 shrink-0 text-yellow-500" />
+                                    {mode === 'monthly' ? (
+                                        <button
+                                            type="button"
+                                            onClick={() => void handleDeleteBill(bill)}
+                                            disabled={Boolean(bill.recurringDebtId) || deletingBillId === bill.id}
+                                            className="mt-0.5 rounded p-1 text-gray-400 transition-colors hover:bg-red-500/10 hover:text-red-400 disabled:cursor-not-allowed disabled:opacity-40"
+                                            title={bill.recurringDebtId ? 'Elimina esta cuota desde Facturas generales' : 'Eliminar factura'}
+                                            aria-label={bill.recurringDebtId ? 'Factura ligada a deuda general' : `Eliminar factura ${bill.description}`}
+                                        >
+                                            <Trash2 className="h-4 w-4" />
+                                        </button>
+                                    ) : (
+                                        <AlertCircle className="mt-0.5 h-4 w-4 shrink-0 text-yellow-500" />
+                                    )}
                                     <div className="min-w-0">
                                         <h3 className="truncate text-sm font-medium text-white">{bill.description}</h3>
                                         <div className="mt-1 flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1 text-xs text-gray-400">
-                                        {bill.date && (
-                                                <span className="flex items-center"><Calendar className="mr-1 h-3.5 w-3.5 shrink-0" /> {new Date(typeof bill.date === 'object' ? (bill.date as any).toMillis() : bill.date).toLocaleDateString('es-CO')}</span>
+                                        {dueDate && (
+                                            <span className="flex items-center"><Calendar className="mr-1 h-3.5 w-3.5 shrink-0" /> Vence {new Date(dueDateMillis).toLocaleDateString('es-CO')}</span>
                                         )}
                                         {bill.categoryName && (
                                                 <span className="break-words">{bill.categoryName}</span>
@@ -203,13 +263,14 @@ export const BillsView: React.FC<BillsViewProps> = ({ accounts, onRefresh }) => 
                                     <button onClick={() => openPaymentDialog(bill)} className="rounded bg-green-600 px-3 py-1.5 text-xs font-medium text-white transition-colors hover:bg-green-700 sm:px-4 sm:py-2 sm:text-sm">Pagar</button>
                                 </div>
                             </div>
-                        ))}
+                        );
+                        })}
                     </div>
                 )}
             </div>
 
             {/* Deudas */}
-            <div className="bg-gray-800 rounded-lg p-6 border border-gray-700">
+            {mode === 'full' && <div className="bg-gray-800 rounded-lg p-6 border border-gray-700">
                 <div className="flex justify-between items-center mb-4">
                     <div>
                         <h2 className="text-xl font-bold text-white flex items-center">
@@ -306,7 +367,7 @@ export const BillsView: React.FC<BillsViewProps> = ({ accounts, onRefresh }) => 
                         ))}
                     </div>
                 )}
-            </div>
+            </div>}
             {billToPay && (
                 <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4" role="presentation">
                     <div className="w-full max-w-md rounded-lg border border-gray-700 bg-gray-900 p-6 shadow-2xl" role="dialog" aria-modal="true" aria-labelledby="payment-dialog-title">
@@ -321,8 +382,9 @@ export const BillsView: React.FC<BillsViewProps> = ({ accounts, onRefresh }) => 
                         <label htmlFor="payment-account" className="mb-2 block text-sm text-gray-300">Medio de pago</label>
                         <select
                             id="payment-account"
-                            value={paymentAccountId}
+                            value={effectivePaymentAccountId}
                             onChange={event => setPaymentAccountId(event.target.value)}
+                            disabled={Boolean(protectedPaymentAccount)}
                             className="w-full rounded border border-gray-600 bg-gray-800 px-3 py-2 text-white focus:border-rodez-red focus:outline-none"
                             required
                         >
@@ -335,6 +397,11 @@ export const BillsView: React.FC<BillsViewProps> = ({ accounts, onRefresh }) => 
                                 </option>
                             ))}
                         </select>
+                        {protectedPaymentAccount && (
+                            <p className="mt-2 text-xs text-gray-500">
+                                Esta factura se pagará automáticamente desde la cuenta protegida {protectedPaymentAccount.name}.
+                            </p>
+                        )}
                         {selectedPaymentAccount && !hasEnoughBalance && (
                             <p className="mt-2 text-sm text-red-400" role="alert">
                                 Saldo insuficiente: disponible ${paymentAvailable.toLocaleString()}, factura ${billToPay.amount.toLocaleString()}.

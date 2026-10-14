@@ -57,10 +57,13 @@ export enum AccountType {
   CREDIT_CARD = 'CREDIT_CARD'
 }
 
+export type DefaultAccountKey = 'CASH' | 'INVESTMENT' | 'STABILITY';
+
 export interface Account {
   id: string;
   name: string;
   type: AccountType;
+  defaultKey?: DefaultAccountKey;
   balance: number;
   savingsYieldRateAnnual?: number;
   creditLimit?: number;
@@ -97,6 +100,9 @@ export interface Subcategory {
   id: string;
   name: string;
   isDefault?: boolean;
+  isFixedExpense?: boolean;
+  fixedAmount?: number;
+  dueDay?: number;
 }
 
 export interface Category {
@@ -134,6 +140,7 @@ export interface Transaction {
   dueDate?: number; // Fecha de vencimiento para facturas
   isPaid?: boolean; // Si ya fue pagada
   recurringDebtId?: string; // ID de la deuda recurrente asociada
+  fixedExpenseId?: string; // ID de la subcategoría que genera este gasto fijo
   bucketId?: BudgetBucket; // Cubeta asignada (50/25/15/10)
   investmentName?: string; // Nombre del activo/inversión (ej. "Trading", "Apartamento")
   isInvestmentReturn?: boolean; // Si es un ingreso por retorno de inversión
@@ -174,6 +181,8 @@ export interface FinancialSummary {
   monthlyExpenses: number;
   netBalance: number;
   pendingBillsAmount?: number; // Total de facturas pendientes
+  monthlyBucketAmounts?: Record<BudgetBucket, number>;
+  monthlyBucketPercentages?: Record<BudgetBucket, number>;
   expensesByCategory: {
     category: string;
     amount: number;
