@@ -1284,9 +1284,7 @@ export const deleteRecurringDebt = async (debtId: string, userId: string): Promi
 };
 
 /**
- * Reset all budget data for a user
- * Deletes: accounts, transactions, categories, recurring debts
- * Does NOT delete: trades, custody_overrides (Dominic calendar)
+ * Reset all financial data for a user.
  */
 export const resetBudgetData = async (userId: string): Promise<void> => {
     try {

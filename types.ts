@@ -1,33 +1,3 @@
-export interface VisualTrade {
-  id: string;
-  tradeImage: {
-    base64?: string;
-    mimeType: string;
-    url?: string;
-  };
-  userAction: 'CALL' | 'PUT';
-  outcome: 'WIN' | 'LOSS';
-  amountInvested: number;
-  payout: number;
-  createdAt: number; // Timestamp
-  // Optional result image for losses or specific confirmations
-  resultImage?: {
-    base64?: string;
-    mimeType: string;
-    url?: string;
-  };
-}
-
-export interface TradingDay {
-  date: string; // YYYY-MM-DD
-  status: 'PENDING' | 'ACTIVE' | 'CLOSED' | 'WEEKEND';
-  pnl: number;
-  trades: VisualTrade[];
-  itm: number;
-  otm: number;
-  dayOfWeek: number;
-}
-
 export interface BudgetDay {
   date: string; // YYYY-MM-DD
   status: 'PENDING' | 'ACTIVE' | 'CLOSED' | 'WEEKEND';
@@ -38,16 +8,8 @@ export interface BudgetDay {
   dayOfWeek: number;
 }
 
-export enum ViewState {
-  DASHBOARD = 'DASHBOARD',
-  SNIPER = 'SNIPER',
-  BUDGET = 'BUDGET',
-  DOMINIC = 'DOMINIC',
-  SETTINGS = 'SETTINGS'
-}
-
 // ============================================
-// BUDGET MODULE TYPES
+// 5-5 FINANZAS TYPES
 // ============================================
 
 export enum AccountType {
@@ -189,71 +151,4 @@ export interface FinancialSummary {
     percentage: number;
   }[];
   bucketBalances?: Record<BudgetBucket, number>; // Saldo acumulado por cubeta
-}
-
-// ============================================
-// DOMINIC / CUSTODY MODULE TYPES
-// ============================================
-
-export interface ChecklistItem {
-  id: string;
-  text: string;
-  completed: boolean;
-  responsible: 'MOM' | 'DAD';
-  time?: string;
-}
-
-export interface GeneralReminder {
-  id: string;
-  text: string;
-  createdAt: number;
-}
-
-export interface AnnualReminder {
-  id: string;
-  text: string;
-  day: number;
-  month: number;
-  leadDays: number; // How many days before to start reminding
-  createdAt: number;
-}
-
-export interface CustodyOverride {
-  id: string;
-  date: string; // YYYY-MM-DD
-  responsible: 'MOM' | 'DAD';
-  originalResponsible: 'MOM' | 'DAD'; // the original assignment before any override
-  note?: string;
-  checklist?: ChecklistItem[];
-  pickupTime?: string;
-  createdAt: number;
-}
-
-export interface CustodyDay {
-  date: Date;
-  dateString: string; // YYYY-MM-DD
-  responsible: 'MOM' | 'DAD';
-  isOverride: boolean;
-  isToday: boolean;
-  isCurrentMonth: boolean;
-  checklist?: ChecklistItem[];
-}
-
-// ============================================
-// STORYBOARD / TRADING PLAYBOOK TYPES
-// ============================================
-
-export interface StoryboardItem {
-  id: string;
-  title: string;
-  category: string; // e.g. 'Reversión', 'Continuación', 'Rompimiento', 'Soporte/Resistencia', 'Patrón Vela', etc.
-  imageUrl: string; // URL from Firebase or base64 data URI
-  imageBase64?: string; // Offline fallback base64
-  rules?: string; // Rules/checklist: e.g. "Esperar mecha de rechazo en zona clave"
-  timeframe?: string; // e.g. '1M', '5M', '15M'
-  asset?: string; // e.g. 'EUR/USD', 'OTC', 'General'
-  isPinned?: boolean; // Pinned for today's session
-  tags?: string[];
-  createdAt: number;
-  updatedAt?: number;
 }

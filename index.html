@@ -60,34 +60,6 @@
     }
   </style>
 
-  <!-- Fallback Tailwind CDN in case of standalone static execution -->
-  <script src="https://cdn.tailwindcss.com"></script>
-  <script>
-    if (window.tailwind) {
-      tailwind.config = {
-        theme: {
-          extend: {
-            colors: {
-              gray: {
-                750: '#2d3748',
-                850: '#1a202c',
-                950: '#0d1117',
-              },
-              rodez: {
-                green: '#00ff9d',
-                red: '#ef4444',
-                blue: '#3b82f6'
-              },
-              'sniper-blue': '#3b82f6'
-            },
-            animation: {
-              'pulse-slow': 'pulse 3s cubic-bezier(0.4, 0, 0.6, 1) infinite',
-            }
-          },
-        },
-      }
-    }
-  </script>
 </head>
 
 <body class="bg-gray-950 text-white antialiased">

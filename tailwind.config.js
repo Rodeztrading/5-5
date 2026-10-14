@@ -20,8 +20,7 @@ export default {
           green: '#00ff9d',
           red: '#ef4444',
           blue: '#3b82f6'
-        },
-        'sniper-blue': '#3b82f6'
+        }
       },
       animation: {
         'pulse-slow': 'pulse 3s cubic-bezier(0.4, 0, 0.6, 1) infinite',
