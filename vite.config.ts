@@ -13,6 +13,9 @@ export default defineConfig({
     VitePWA({
       registerType: 'autoUpdate',
       includeAssets: ['favicon.ico', 'apple-touch-icon.png', 'masked-icon.svg'],
+      workbox: {
+        navigateFallbackDenylist: [/^\/__\/auth\//]
+      },
       manifest: {
         name: '5-5 Finanzas',
         short_name: '5-5',
