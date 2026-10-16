@@ -13,6 +13,12 @@ La configuración Firebase del cliente está en `config/firebase.ts`. Confirma e
 
 ## Antes de publicar
 
+### Inicio de sesión en Vercel
+
+El inicio de sesión con Google utiliza `signInWithRedirect` y un proxy de Vercel para que los auxiliares de Firebase Authentication usen el mismo dominio que la aplicación. `config/firebase.ts` debe usar el dominio del sitio como `authDomain`, y `vercel.json` debe conservar el rewrite de `/__/auth/*` hacia `https://trading-30254.firebaseapp.com/__/auth/*`.
+
+En Firebase Console, agrega `dashboard-dusky-psi-50.vercel.app` a **Authentication → Configuración → Dominios autorizados**. En Google Cloud Console, abre **APIs y servicios → Credenciales**, edita el cliente OAuth web asociado a Firebase y agrega `https://dashboard-dusky-psi-50.vercel.app/__/auth/handler` en **URI de redireccionamiento autorizados**. Publica el frontend en Vercel después de configurar ambos dominios. No elimines el URI existente de `trading-30254.firebaseapp.com`.
+
 1. En Firebase Console, abre **Firestore Database → Datos** y revisa si existen colecciones raíz llamadas `accounts`, `transactions`, `categories`, `budgets` o `recurringDebts`.
 2. Si existen, crea y verifica una copia de seguridad. No ejecutes una migración desde el navegador que copie esos datos a cada usuario: las colecciones raíz no tienen necesariamente un propietario verificable.
 3. Migra solo documentos cuya propiedad pueda asociarse de manera fiable con un UID, usando un proceso administrativo controlado. Comprueba las cantidades y los saldos antes de continuar. Si no puedes determinar el dueño, conserva esos documentos en la copia de seguridad hasta resolverlo.
@@ -54,7 +60,7 @@ El flujo usa Firebase Functions en `southamerica-east1`: una callable autenticad
    Usa el Access Token de prueba y el secreto de firma de Webhooks asociado a la aplicación. No compartas esos valores por chat.
 
 5. Configura el parámetro `APP_BASE_URL` con el origen público HTTPS del sitio (por ejemplo, `https://tu-dominio.com`). Firebase CLI solicitará el valor al desplegar o puedes definirlo en `functions/.env.trading-30254`, archivo ignorado por Git.
-   Para pruebas con un Access Token `TEST-`, agrega también `MERCADOPAGO_TEST_PAYER_EMAIL` en ese mismo archivo con el correo generado para una cuenta **Comprador de prueba** colombiana. El correo normal de Google/Firebase no sirve para el comprador de una operación de prueba. Esta variable solo se usa cuando el token configurado es de prueba; con un token productivo se utiliza el correo autenticado del usuario.
+   Para pruebas agrega `MERCADOPAGO_TEST_MODE=true` y `MERCADOPAGO_TEST_PAYER_EMAIL` en ese mismo archivo. El correo debe ser el que devolvió Mercado Pago al crear la cuenta **Comprador de prueba** colombiana. En modo de prueba, la integración usa ese comprador aunque el usuario de 5-5 haya iniciado sesión con Google. Antes de pasar a producción, quita esas variables, establece `MERCADOPAGO_TEST_MODE=false` y configura el Access Token productivo; así se utilizará el correo autenticado del usuario.
 6. Instala dependencias y ejecuta las pruebas de las Functions:
 
    ```powershell

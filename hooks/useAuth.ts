@@ -16,6 +16,22 @@ interface AuthState {
     error: string | null;
 }
 
+const getAuthErrorMessage = (error: unknown): string => {
+    if (typeof error === 'object' && error !== null && 'code' in error) {
+        const code = String(error.code);
+        if (code === 'auth/unauthorized-domain') {
+            return 'Este dominio no está autorizado en Firebase Authentication.';
+        }
+        if (code === 'auth/operation-not-allowed') {
+            return 'El acceso con Google no está habilitado en Firebase Authentication.';
+        }
+    }
+
+    return error instanceof Error
+        ? error.message
+        : 'No pudimos completar el inicio de sesión. Inténtalo nuevamente.';
+};
+
 export const useAuth = () => {
     const [authState, setAuthState] = useState<AuthState>({
         user: null,
@@ -28,6 +44,7 @@ export const useAuth = () => {
         let redirectChecked = false;
         let authStateReceived = false;
         let finalUser: User | null = null;
+        let redirectError: string | null = null;
 
         console.log('[Auth] Hook initialized, checking state...');
 
@@ -37,7 +54,7 @@ export const useAuth = () => {
                 setAuthState({
                     user: finalUser,
                     loading: false,
-                    error: null
+                    error: redirectError
                 });
             }
         };
@@ -52,6 +69,8 @@ export const useAuth = () => {
             })
             .catch((error) => {
                 console.error('[Auth] Redirect error:', error);
+                const code = typeof error?.code === 'string' ? error.code : 'unknown';
+                redirectError = `Error (${code}): ${getAuthErrorMessage(error)}`;
                 redirectChecked = true;
                 finalize();
             });
@@ -93,7 +112,7 @@ export const useAuth = () => {
             setAuthState(prev => ({
                 ...prev,
                 loading: false,
-                error: `Error (${code}): ${error instanceof Error ? error.message : 'No pudimos iniciar sesión. Inténtalo nuevamente.'}`
+                error: `Error (${code}): ${getAuthErrorMessage(error)}`
             }));
         }
     };
