@@ -6,11 +6,21 @@ import { Settings, LogOut, User, Download, Smartphone, Share, Trash2, X } from '
 import { resetBudgetData } from './services/budgetService';
 import { useAuth } from './hooks/useAuth';
 import { usePWAInstall } from './hooks/usePWAInstall';
+import { useSubscription } from './hooks/useSubscription';
+import { SubscriptionAccess } from './components/SubscriptionAccess';
 
 type AppView = 'BUDGET' | 'SETTINGS';
 
 const App: React.FC = () => {
   const { user, loading: authLoading, logout } = useAuth();
+  const {
+    subscription,
+    loading: subscriptionLoading,
+    error: subscriptionError,
+    setError: setSubscriptionError,
+    startCheckout,
+    cancel,
+  } = useSubscription(user?.uid ?? '');
   const { isInstallable, installApp } = usePWAInstall();
   const [view, setView] = useState<AppView>('BUDGET');
   const [loading, setLoading] = useState(false);
@@ -22,6 +32,30 @@ const App: React.FC = () => {
 
   if (!user) {
     return <LoginScreen />;
+  }
+
+  const accessUntil = subscription?.accessUntil?.toDate().getTime() ?? 0;
+  const canAccess = ['active', 'cancelled', 'paused', 'past_due'].includes(subscription?.status ?? '')
+    && accessUntil > Date.now();
+  const requireSubscription = import.meta.env.VITE_REQUIRE_ACTIVE_SUBSCRIPTION === 'true';
+
+  if (requireSubscription && subscriptionLoading) {
+    return <LoadingScreen />;
+  }
+
+  if (requireSubscription && !canAccess) {
+    return (
+      <SubscriptionAccess
+        user={user}
+        subscription={subscription}
+        error={subscriptionError}
+        startCheckout={startCheckout}
+        cancel={cancel}
+        logout={logout}
+        onError={setSubscriptionError}
+        canAccess={canAccess}
+      />
+    );
   }
 
   return (
@@ -97,6 +131,20 @@ const App: React.FC = () => {
                 <Settings className="w-16 h-16 mx-auto mb-4 text-gray-700" />
                 <h2 className="text-2xl font-bold text-white mb-2">Ajustes</h2>
                 <p className="text-gray-400">Configuración de tu cuenta y aplicación</p>
+              </div>
+
+              <div className="mb-6">
+                <SubscriptionAccess
+                  user={user}
+                  subscription={subscription}
+                  error={subscriptionError}
+                  startCheckout={startCheckout}
+                  cancel={cancel}
+                  logout={logout}
+                  onError={setSubscriptionError}
+                  canAccess={canAccess}
+                  compact
+                />
               </div>
 
               {/* Mobile App Section */}

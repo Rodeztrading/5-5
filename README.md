@@ -26,6 +26,10 @@ La aplicación usa Firebase Authentication para iniciar sesión y Cloud Firestor
 
 Las reglas del repositorio son plantillas fuente; no se aplican al proyecto Firebase automáticamente. Antes de publicarlas, verifica y respalda cualquier dato financiero que siga en colecciones raíz heredadas como `accounts`, `transactions`, `categories`, `budgets` o `recurringDebts`. Las reglas nuevas bloquean el acceso del cliente a esas colecciones sin borrar sus documentos.
 
+## Pagos
+
+La integración de suscripciones de Mercado Pago usa Firebase Functions para crear el checkout y validar notificaciones. Sigue la sección de suscripciones en [FIREBASE_SETUP.md](./FIREBASE_SETUP.md) para configurar secretos, probar credenciales y desplegar el backend y las reglas en el orden correcto. No uses credenciales reales hasta completar las pruebas de punta a punta.
+
 ## Funciones
 
 - Cuentas y saldos personales.
