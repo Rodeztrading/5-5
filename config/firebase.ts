@@ -6,7 +6,7 @@ import { getFunctions } from 'firebase/functions';
 // Firebase configuration from environment variables
 const firebaseConfig = {
   apiKey: "AIzaSyCuyD8rm-gZCHIV8wt_Wh0GK8ufHSm7YzU",
-  authDomain: "dashboard-dusky-psi-50.vercel.app",
+  authDomain: "trading-30254.firebaseapp.com",
   projectId: "trading-30254",
   storageBucket: "trading-30254.firebasestorage.app",
   messagingSenderId: "247034649250",

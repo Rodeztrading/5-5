@@ -15,11 +15,9 @@ La configuración Firebase del cliente está en `config/firebase.ts`. Confirma e
 
 ### Inicio de sesión en Vercel
 
-El inicio de sesión con Google utiliza `signInWithRedirect` y un proxy de Vercel para que los auxiliares de Firebase Authentication usen el mismo dominio que la aplicación. `config/firebase.ts` debe usar el dominio del sitio como `authDomain`, y `vercel.json` debe conservar el rewrite de `/__/auth/*` hacia `https://trading-30254.firebaseapp.com/__/auth/*`.
+El inicio de sesión con Google utiliza `signInWithRedirect` y el dominio de autenticación original de Firebase (`trading-30254.firebaseapp.com`). Mantén ese valor en `config/firebase.ts`; no requiere crear otro cliente OAuth ni cambiar el callback de autenticación de Firebase.
 
-El service worker de la PWA debe excluir `/__/auth/*` del fallback de navegación para que no reemplace el handler de Firebase con la aplicación. Esa exclusión está configurada en `vite.config.ts`.
-
-En Firebase Console, agrega `dashboard-dusky-psi-50.vercel.app` a **Authentication → Configuración → Dominios autorizados**. En Google Cloud Console, abre **APIs y servicios → Credenciales**, edita el cliente OAuth web asociado a Firebase y agrega `https://dashboard-dusky-psi-50.vercel.app/__/auth/handler` en **URI de redireccionamiento autorizados**. Publica el frontend en Vercel después de configurar ambos dominios. No elimines el URI existente de `trading-30254.firebaseapp.com`.
+En Firebase Console, agrega `dashboard-dusky-psi-50.vercel.app` a **Authentication → Configuración → Dominios autorizados**. Conserva los URI existentes de Firebase en el cliente OAuth asociado al proyecto; no los reemplaces por el dominio de Vercel.
 
 1. En Firebase Console, abre **Firestore Database → Datos** y revisa si existen colecciones raíz llamadas `accounts`, `transactions`, `categories`, `budgets` o `recurringDebts`.
 2. Si existen, crea y verifica una copia de seguridad. No ejecutes una migración desde el navegador que copie esos datos a cada usuario: las colecciones raíz no tienen necesariamente un propietario verificable.
