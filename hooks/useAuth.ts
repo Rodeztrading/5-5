@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import {
     User,
+    signInWithPopup,
     signInWithRedirect,
     signOut,
     onAuthStateChanged,
@@ -105,7 +106,18 @@ export const useAuth = () => {
         try {
             console.log('[Auth] Initiating Google Login...');
             setAuthState(prev => ({ ...prev, loading: true, error: null }));
-            await signInWithRedirect(auth, googleProvider);
+            try {
+                const result = await signInWithPopup(auth, googleProvider);
+                console.log('[Auth] Popup sign-in succeeded:', result.user.email);
+            } catch (popupError: any) {
+                console.warn('[Auth] Popup sign-in failed:', popupError.code);
+                const isMobile = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
+                if (isMobile || popupError.code === 'auth/popup-blocked') {
+                    await signInWithRedirect(auth, googleProvider);
+                } else {
+                    throw popupError;
+                }
+            }
         } catch (error: any) {
             console.error('[Auth] Login error:', error);
             const code = typeof error?.code === 'string' ? error.code : 'unknown';
