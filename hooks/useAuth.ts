@@ -96,9 +96,13 @@ export const useAuth = () => {
             } catch (popupError: any) {
                 console.warn('[Auth] Popup failed or blocked:', popupError.code);
 
-                // If it's a mobile device and popup failed/blocked, fall back to redirect
                 const isMobile = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
-                if (isMobile || popupError.code === 'auth/popup-blocked') {
+                const shouldUseRedirect = isMobile || [
+                    'auth/popup-blocked',
+                    'auth/popup-closed-by-user',
+                    'auth/cancelled-popup-request',
+                ].includes(popupError.code);
+                if (shouldUseRedirect) {
                     console.log('[Auth] Falling back to signInWithRedirect...');
                     await signInWithRedirect(auth, googleProvider);
                 } else {
@@ -107,10 +111,18 @@ export const useAuth = () => {
             }
         } catch (error: any) {
             console.error('[Auth] Login error:', error);
+            const code = typeof error?.code === 'string' ? error.code : 'unknown';
+            const message = code === 'auth/popup-closed-by-user'
+                || code === 'auth/popup-blocked'
+                || code === 'auth/cancelled-popup-request'
+                ? 'No se pudo abrir la ventana de Google. Intenta de nuevo; si vuelve a cerrarse, habilita las ventanas emergentes para este sitio.'
+                : error instanceof Error
+                    ? error.message
+                    : 'No pudimos iniciar sesión. Inténtalo nuevamente.';
             setAuthState(prev => ({
                 ...prev,
                 loading: false,
-                error: `Error (${error.code || 'unknown'}): ${error.message}`
+                error: `Error (${code}): ${message}`
             }));
         }
     };
