@@ -1,7 +1,6 @@
 import { useState, useEffect } from 'react';
 import {
     User,
-    signInWithPopup,
     signInWithRedirect,
     signOut,
     onAuthStateChanged,
@@ -87,42 +86,14 @@ export const useAuth = () => {
         try {
             console.log('[Auth] Initiating Google Login...');
             setAuthState(prev => ({ ...prev, loading: true, error: null }));
-
-            // Try Popup first (works on many modern mobile browsers and is much more stable)
-            console.log('[Auth] Attempting signInWithPopup...');
-            try {
-                const result = await signInWithPopup(auth, googleProvider);
-                console.log('[Auth] Popup success!', result.user.email);
-            } catch (popupError: any) {
-                console.warn('[Auth] Popup failed or blocked:', popupError.code);
-
-                const isMobile = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
-                const shouldUseRedirect = isMobile || [
-                    'auth/popup-blocked',
-                    'auth/popup-closed-by-user',
-                    'auth/cancelled-popup-request',
-                ].includes(popupError.code);
-                if (shouldUseRedirect) {
-                    console.log('[Auth] Falling back to signInWithRedirect...');
-                    await signInWithRedirect(auth, googleProvider);
-                } else {
-                    throw popupError;
-                }
-            }
+            await signInWithRedirect(auth, googleProvider);
         } catch (error: any) {
             console.error('[Auth] Login error:', error);
             const code = typeof error?.code === 'string' ? error.code : 'unknown';
-            const message = code === 'auth/popup-closed-by-user'
-                || code === 'auth/popup-blocked'
-                || code === 'auth/cancelled-popup-request'
-                ? 'No se pudo abrir la ventana de Google. Intenta de nuevo; si vuelve a cerrarse, habilita las ventanas emergentes para este sitio.'
-                : error instanceof Error
-                    ? error.message
-                    : 'No pudimos iniciar sesión. Inténtalo nuevamente.';
             setAuthState(prev => ({
                 ...prev,
                 loading: false,
-                error: `Error (${code}): ${message}`
+                error: `Error (${code}): ${error instanceof Error ? error.message : 'No pudimos iniciar sesión. Inténtalo nuevamente.'}`
             }));
         }
     };
