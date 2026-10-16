@@ -112,7 +112,11 @@ export const useAuth = () => {
             } catch (popupError: any) {
                 console.warn('[Auth] Popup sign-in failed:', popupError.code);
                 const isMobile = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
-                if (isMobile || popupError.code === 'auth/popup-blocked') {
+                const shouldUseRedirect = [
+                    'auth/popup-blocked',
+                    'auth/popup-closed-by-user'
+                ].includes(popupError.code);
+                if (isMobile || shouldUseRedirect) {
                     await signInWithRedirect(auth, googleProvider);
                 } else {
                     throw popupError;
