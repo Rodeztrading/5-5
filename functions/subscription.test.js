@@ -1,7 +1,11 @@
 import assert from 'node:assert/strict';
 import { createHmac } from 'node:crypto';
 import test from 'node:test';
-import { getNotificationResource, verifyMercadoPagoSignature } from './subscription.js';
+import {
+  getNotificationResource,
+  getPayerEmail,
+  verifyMercadoPagoSignature,
+} from './subscription.js';
 
 const secret = 'test-webhook-secret';
 const requestId = 'request-123';
@@ -45,4 +49,22 @@ test('reads subscription webhooks from query parameters and rejects mismatched I
     query: { type: 'subscription_preapproval', 'data.id': dataId },
     body: { data: { id: 'another-id' } },
   }), null);
+});
+
+test('uses a Mercado Pago test buyer for test tokens and Firebase email for production', () => {
+  assert.equal(getPayerEmail({
+    accessToken: 'TEST-token',
+    authenticatedEmail: 'google@example.com',
+    testPayerEmail: 'buyer@testuser.com',
+  }), 'buyer@testuser.com');
+  assert.equal(getPayerEmail({
+    accessToken: 'APP_USR-token',
+    authenticatedEmail: 'customer@example.com',
+    testPayerEmail: '',
+  }), 'customer@example.com');
+  assert.throws(() => getPayerEmail({
+    accessToken: 'TEST-token',
+    authenticatedEmail: 'google@example.com',
+    testPayerEmail: '',
+  }));
 });

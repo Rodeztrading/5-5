@@ -54,6 +54,7 @@ El flujo usa Firebase Functions en `southamerica-east1`: una callable autenticad
    Usa el Access Token de prueba y el secreto de firma de Webhooks asociado a la aplicación. No compartas esos valores por chat.
 
 5. Configura el parámetro `APP_BASE_URL` con el origen público HTTPS del sitio (por ejemplo, `https://tu-dominio.com`). Firebase CLI solicitará el valor al desplegar o puedes definirlo en `functions/.env.trading-30254`, archivo ignorado por Git.
+   Para pruebas con un Access Token `TEST-`, agrega también `MERCADOPAGO_TEST_PAYER_EMAIL` en ese mismo archivo con el correo generado para una cuenta **Comprador de prueba** colombiana. El correo normal de Google/Firebase no sirve para el comprador de una operación de prueba. Esta variable solo se usa cuando el token configurado es de prueba; con un token productivo se utiliza el correo autenticado del usuario.
 6. Instala dependencias y ejecuta las pruebas de las Functions:
 
    ```powershell

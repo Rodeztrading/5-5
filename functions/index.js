@@ -6,6 +6,7 @@ import { defineSecret, defineString } from 'firebase-functions/params';
 import { logger } from 'firebase-functions';
 import {
   getNotificationResource,
+  getPayerEmail,
   SUBSCRIPTION_DOCUMENT_ID,
   SUBSCRIPTION_PRICE_COP,
   verifyMercadoPagoSignature,
@@ -18,6 +19,7 @@ const region = 'southamerica-east1';
 const mercadoPagoAccessToken = defineSecret('MERCADOPAGO_ACCESS_TOKEN');
 const mercadoPagoWebhookSecret = defineSecret('MERCADOPAGO_WEBHOOK_SECRET');
 const appBaseUrl = defineString('APP_BASE_URL');
+const mercadoPagoTestPayerEmail = defineString('MERCADOPAGO_TEST_PAYER_EMAIL', { default: '' });
 
 function subscriptionRef(uid) {
   return db.doc(`users/${uid}/subscriptions/${SUBSCRIPTION_DOCUMENT_ID}`);
@@ -79,9 +81,24 @@ export const createMercadoPagoSubscription = onCall(
       throw new HttpsError('failed-precondition', 'Tu cuenta necesita un correo electrónico válido.');
     }
 
+    const accessToken = mercadoPagoAccessToken.value();
+    let payerEmail;
+    try {
+      payerEmail = getPayerEmail({
+        accessToken,
+        authenticatedEmail: email,
+        testPayerEmail: mercadoPagoTestPayerEmail.value(),
+      });
+    } catch {
+      throw new HttpsError(
+        'failed-precondition',
+        'Falta configurar el correo de un comprador de prueba de Mercado Pago para continuar.'
+      );
+    }
     const uid = request.auth.uid;
     const ref = subscriptionRef(uid);
     const lockId = randomUUID();
+    let activeLockId = lockId;
     let checkoutUrl;
     let createdSubscription = false;
 
@@ -125,6 +142,7 @@ export const createMercadoPagoSubscription = onCall(
         checkoutUrl = result.initPoint;
       } else {
         const requestLockId = result.lockId;
+        activeLockId = requestLockId;
         const baseUrl = getAppBaseUrl();
         const projectId = process.env.GCLOUD_PROJECT;
         const webhookUrl = `https://${region}-${projectId}.cloudfunctions.net/mercadoPagoWebhook`;
@@ -133,7 +151,7 @@ export const createMercadoPagoSubscription = onCall(
           idempotencyKey: requestLockId,
           body: {
             reason: 'Suscripción mensual 5-5 Finanzas',
-            payer_email: result.email,
+            payer_email: payerEmail,
             back_url: `${baseUrl}/?subscription=return`,
             notification_url: webhookUrl,
             external_reference: uid,
@@ -180,6 +198,17 @@ export const createMercadoPagoSubscription = onCall(
     } catch (error) {
       if (error instanceof HttpsError) {
         throw error;
+      }
+
+      const snapshot = await ref.get();
+      if (snapshot.data()?.createLockId === activeLockId) {
+        await ref.set({
+          status: 'inactive',
+          createLockId: FieldValue.delete(),
+          createStartedAt: FieldValue.delete(),
+          checkoutEmail: FieldValue.delete(),
+          updatedAt: FieldValue.serverTimestamp(),
+        }, { merge: true });
       }
 
       logger.error('Could not create Mercado Pago subscription', { uid, error });

@@ -3,6 +3,18 @@ import { createHmac, timingSafeEqual } from 'node:crypto';
 export const SUBSCRIPTION_PRICE_COP = 9900;
 export const SUBSCRIPTION_DOCUMENT_ID = 'mercadopago';
 
+export function getPayerEmail({ accessToken, authenticatedEmail, testPayerEmail }) {
+  if (accessToken.startsWith('TEST-')) {
+    const email = testPayerEmail?.trim();
+    if (!email || !email.includes('@')) {
+      throw new Error('A valid Mercado Pago test buyer email is required.');
+    }
+    return email;
+  }
+
+  return authenticatedEmail;
+}
+
 export function verifyMercadoPagoSignature({ signatureHeader, requestId, dataId, secret }) {
   if (!signatureHeader || !requestId || !dataId || !secret) {
     return false;

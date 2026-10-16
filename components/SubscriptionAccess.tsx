@@ -47,7 +47,9 @@ export const SubscriptionAccess: React.FC<SubscriptionAccessProps> = ({
       await action();
     } catch (actionError) {
       console.error('Subscription action failed:', actionError);
-      onError('No pudimos completar la acción. Inténtalo nuevamente.');
+      onError(actionError instanceof Error
+        ? actionError.message
+        : 'No pudimos completar la acción. Inténtalo nuevamente.');
     } finally {
       setBusy(false);
     }
