@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useCallback, useState } from 'react';
 import { BudgetView } from './components/BudgetView';
 import { LoginScreen } from './components/LoginScreen';
 import { LoadingScreen } from './components/LoadingScreen';
@@ -25,6 +25,8 @@ const App: React.FC = () => {
   const [view, setView] = useState<AppView>('BUDGET');
   const [loading, setLoading] = useState(false);
   const [showBudgetResetConfirm, setShowBudgetResetConfirm] = useState(false);
+  const [showSubscriptionPrompt, setShowSubscriptionPrompt] = useState(false);
+  const requestSubscription = useCallback(() => setShowSubscriptionPrompt(true), []);
 
   if (authLoading) {
     return <LoadingScreen />;
@@ -34,28 +36,12 @@ const App: React.FC = () => {
     return <LoginScreen />;
   }
 
-  const accessUntil = subscription?.accessUntil?.toDate().getTime() ?? 0;
+  const accessUntil = subscription?.accessUntil?.toMillis?.() ?? 0;
   const canAccess = ['active', 'cancelled', 'paused', 'past_due'].includes(subscription?.status ?? '')
     && accessUntil > Date.now();
-  const requireSubscription = import.meta.env.VITE_REQUIRE_ACTIVE_SUBSCRIPTION === 'true';
 
-  if (requireSubscription && subscriptionLoading) {
+  if (subscriptionLoading) {
     return <LoadingScreen />;
-  }
-
-  if (requireSubscription && !canAccess) {
-    return (
-      <SubscriptionAccess
-        user={user}
-        subscription={subscription}
-        error={subscriptionError}
-        startCheckout={startCheckout}
-        cancel={cancel}
-        logout={logout}
-        onError={setSubscriptionError}
-        canAccess={canAccess}
-      />
-    );
   }
 
   return (
@@ -121,7 +107,9 @@ const App: React.FC = () => {
       {/* Main Content */}
       <main className="flex-1 relative overflow-hidden flex flex-col min-w-0">
 
-        {view === 'BUDGET' && <BudgetView />}
+        {view === 'BUDGET' && (
+          <BudgetView canManage={canAccess} onRequireSubscription={requestSubscription} />
+        )}
 
         {view === 'SETTINGS' && (
           <div className="h-full overflow-y-auto">
@@ -200,7 +188,11 @@ const App: React.FC = () => {
                   type="button"
                   onClick={(e) => {
                     e.preventDefault();
-                    setShowBudgetResetConfirm(true);
+                    if (canAccess) {
+                      setShowBudgetResetConfirm(true);
+                    } else {
+                      requestSubscription();
+                    }
                   }}
                   className="w-full sm:w-auto px-4 py-2 bg-orange-900/20 text-orange-400 rounded hover:bg-orange-900/40 border border-orange-900/50 transition-colors text-sm flex items-center justify-center"
                 >
@@ -258,6 +250,11 @@ const App: React.FC = () => {
               </button>
               <button
                 onClick={async () => {
+                  if (!canAccess) {
+                    setShowBudgetResetConfirm(false);
+                    requestSubscription();
+                    return;
+                  }
                   try {
                     setLoading(true);
                     await resetBudgetData(user.uid);
@@ -279,6 +276,32 @@ const App: React.FC = () => {
               </button>
             </div>
             </div>
+          </div>
+        </div>
+      )}
+
+      {showSubscriptionPrompt && (
+        <div className="fixed inset-0 z-[110] flex items-center justify-center overflow-y-auto bg-black/80 p-4 backdrop-blur-sm">
+          <div className="relative w-full max-w-lg">
+            <button
+              type="button"
+              onClick={() => setShowSubscriptionPrompt(false)}
+              className="absolute right-3 top-3 z-10 rounded p-2 text-gray-400 hover:bg-gray-800 hover:text-white"
+              aria-label="Cerrar aviso de suscripción"
+            >
+              <X className="h-5 w-5" />
+            </button>
+            <SubscriptionAccess
+              user={user}
+              subscription={subscription}
+              error={subscriptionError}
+              startCheckout={startCheckout}
+              cancel={cancel}
+              logout={logout}
+              onError={setSubscriptionError}
+              canAccess={canAccess}
+              compact
+            />
           </div>
         </div>
       )}

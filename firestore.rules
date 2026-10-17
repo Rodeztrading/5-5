@@ -15,17 +15,22 @@ service cloud.firestore {
         && get(subscriptionPath).data.status in ['active', 'cancelled', 'paused', 'past_due'];
     }
 
+    function isFinancialCollection(collectionName) {
+      return collectionName in [
+        'accounts',
+        'budgets',
+        'categories',
+        'fixedExpenseSkips',
+        'recurringDebts',
+        'transactions'
+      ];
+    }
+
     match /users/{userId}/{collectionName}/{documentId} {
-      allow read, write: if isOwner(userId)
+      allow read: if isOwner(userId) && isFinancialCollection(collectionName);
+      allow write: if isOwner(userId)
         && hasPaidAccess(userId)
-        && collectionName in [
-          'accounts',
-          'budgets',
-          'categories',
-          'fixedExpenseSkips',
-          'recurringDebts',
-          'transactions'
-        ];
+        && isFinancialCollection(collectionName);
     }
 
     // Subscription state may be written by trusted server code only.

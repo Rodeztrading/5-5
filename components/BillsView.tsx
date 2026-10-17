@@ -21,9 +21,19 @@ interface BillsViewProps {
     mode?: 'full' | 'monthly';
     month?: string;
     newDebtFormRequest?: number;
+    canManage: boolean;
+    onRequireSubscription: () => void;
 }
 
-export const BillsView: React.FC<BillsViewProps> = ({ accounts, onRefresh, mode = 'full', month, newDebtFormRequest = 0 }) => {
+export const BillsView: React.FC<BillsViewProps> = ({
+    accounts,
+    onRefresh,
+    mode = 'full',
+    month,
+    newDebtFormRequest = 0,
+    canManage,
+    onRequireSubscription,
+}) => {
     const { user } = useAuth();
     const { confirm: confirmAction, dialog: confirmDialog } = useBrandedConfirm();
     const [pendingBills, setPendingBills] = useState<Transaction[]>([]);
@@ -48,20 +58,25 @@ export const BillsView: React.FC<BillsViewProps> = ({ accounts, onRefresh, mode 
     }, [accounts, debtAccountId]);
 
     useEffect(() => {
-        if (newDebtFormRequest > 0) setShowAddDebt(true);
-    }, [newDebtFormRequest]);
+        if (newDebtFormRequest > 0) {
+            if (canManage) setShowAddDebt(true);
+            else onRequireSubscription();
+        }
+    }, [newDebtFormRequest, canManage, onRequireSubscription]);
 
     useEffect(() => {
         if (user) {
             loadData();
         }
-    }, [user]);
+    }, [user, canManage]);
 
     const loadData = async () => {
         if (!user) return;
         try {
             setLoading(true);
-            await Promise.all([ensureRecurringDebtBills(user.uid), ensureFixedExpenseBills(user.uid)]);
+            if (canManage) {
+                await Promise.all([ensureRecurringDebtBills(user.uid), ensureFixedExpenseBills(user.uid)]);
+            }
             const [transactions, debtData] = await Promise.all([
                 getAllTransactions(user.uid),
                 getAllRecurringDebts(user.uid),
@@ -77,6 +92,10 @@ export const BillsView: React.FC<BillsViewProps> = ({ accounts, onRefresh, mode 
     };
 
     const handlePayBill = async () => {
+        if (!canManage) {
+            onRequireSubscription();
+            return;
+        }
         if (!user || !billToPay || !effectivePaymentAccountId) return;
         try {
             setPayingBill(true);
@@ -93,11 +112,19 @@ export const BillsView: React.FC<BillsViewProps> = ({ accounts, onRefresh, mode 
     };
 
     const openPaymentDialog = (bill: Transaction) => {
+        if (!canManage) {
+            onRequireSubscription();
+            return;
+        }
         setBillToPay(bill);
         setPaymentAccountId(bill.accountId || accounts[0]?.id || '');
     };
 
     const handleDeleteBill = async (bill: Transaction) => {
+        if (!canManage) {
+            onRequireSubscription();
+            return;
+        }
         if (!user || bill.recurringDebtId) return;
         const confirmed = await confirmAction({
             title: 'Eliminar factura pendiente',
@@ -120,6 +147,10 @@ export const BillsView: React.FC<BillsViewProps> = ({ accounts, onRefresh, mode 
     };
 
     const handleAddDebt = async () => {
+        if (!canManage) {
+            onRequireSubscription();
+            return;
+        }
         const principal = Number(debtAmount);
         const payment = Number(monthlyPayment);
         const installmentCount = Number(totalInstallments);
@@ -162,6 +193,10 @@ export const BillsView: React.FC<BillsViewProps> = ({ accounts, onRefresh, mode 
     };
 
     const handleDeleteDebt = async (id: string) => {
+        if (!canManage) {
+            onRequireSubscription();
+            return;
+        }
         if (!user) return;
         const confirmed = await confirmAction({
             title: 'Eliminar deuda general',
@@ -331,7 +366,7 @@ export const BillsView: React.FC<BillsViewProps> = ({ accounts, onRefresh, mode 
                         </h2>
                         <p className="text-sm text-gray-400 mt-1">Registro de deudas a largo plazo</p>
                     </div>
-                    <button onClick={() => setShowAddDebt(true)} className="px-4 py-2 bg-rodez-red hover:bg-blue-600 text-white rounded-lg flex items-center space-x-2 text-sm"><Plus className="w-4 h-4" /> <span>Nueva Deuda</span></button>
+                    <button onClick={() => canManage ? setShowAddDebt(true) : onRequireSubscription()} className="px-4 py-2 bg-rodez-red hover:bg-blue-600 text-white rounded-lg flex items-center space-x-2 text-sm"><Plus className="w-4 h-4" /> <span>Nueva Deuda</span></button>
                 </div>
 
                 {/* Formulario */}

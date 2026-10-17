@@ -218,12 +218,12 @@ export const isProtectedRewardsCategory = (category: Category): boolean =>
     category.type === TransactionType.EXPENSE &&
     normalizeCategoryName(category.name) === 'recompensas';
 
-export const getCategories = async (userId: string): Promise<Category[]> => {
+export const getCategories = async (userId: string, initializeDefaults = true): Promise<Category[]> => {
     try {
         const categoriesRef = collection(db, `users/${userId}/categories`);
         let querySnapshot = await getDocs(query(categoriesRef));
 
-        if (querySnapshot.empty) {
+        if (querySnapshot.empty && initializeDefaults) {
             await initializeDefaultCategories(userId);
             querySnapshot = await getDocs(query(categoriesRef));
         }
@@ -232,6 +232,8 @@ export const getCategories = async (userId: string): Promise<Category[]> => {
             ...doc.data(),
             id: doc.id
         } as Category));
+
+        if (!initializeDefaults) return categories;
 
         const existingRewardsCategory = categories.find(category =>
             category.type === TransactionType.EXPENSE &&
@@ -351,9 +353,9 @@ export const createAccount = async (account: Omit<Account, 'id' | 'createdAt' | 
     }
 };
 
-export const getAllAccounts = async (userId: string): Promise<Account[]> => {
+export const getAllAccounts = async (userId: string, initializeDefaults = true): Promise<Account[]> => {
     try {
-        await ensureDefaultAccounts(userId);
+        if (initializeDefaults) await ensureDefaultAccounts(userId);
         const q = query(collection(db, `users/${userId}/accounts`), orderBy('createdAt', 'asc'));
         const querySnapshot = await getDocs(q);
 
@@ -757,9 +759,13 @@ export const deletePendingBill = async (transactionId: string, userId: string): 
 // FINANCIAL SUMMARY
 // ============================================
 
-export const getFinancialSummary = async (userId: string, month?: string): Promise<FinancialSummary> => {
+export const getFinancialSummary = async (
+    userId: string,
+    month?: string,
+    initializeDefaults = true
+): Promise<FinancialSummary> => {
     try {
-        const accounts = await getAllAccounts(userId);
+        const accounts = await getAllAccounts(userId, initializeDefaults);
         const totalBalance = accounts.reduce((sum, account) => {
             if (account.type !== AccountType.CREDIT_CARD) return sum + account.balance;
             return sum + (account.balance > 0 ? -account.balance : account.balance);
@@ -790,7 +796,7 @@ export const getFinancialSummary = async (userId: string, month?: string): Promi
             .filter(t => t.type === TransactionType.EXPENSE)
             .reduce((sum, t) => sum + t.amount, 0);
 
-        const categories = await getCategories(userId);
+        const categories = await getCategories(userId, initializeDefaults);
         const rewardsCategoryIds = new Set(categories
             .filter(isProtectedRewardsCategory)
             .map(category => category.id));

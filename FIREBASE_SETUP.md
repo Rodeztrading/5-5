@@ -5,8 +5,8 @@ La configuración Firebase del cliente está en `config/firebase.ts`. Confirma e
 ## Qué protegen las reglas
 
 - Solo una sesión autenticada puede acceder a datos financieros.
-- Cada usuario solo puede leer, crear, actualizar y borrar documentos bajo `users/{su UID}/`.
-- El cliente solo tiene acceso a las colecciones financieras que usa la aplicación: `accounts`, `budgets`, `categories`, `fixedExpenseSkips`, `recurringDebts` y `transactions`, y solo mientras tenga un período pagado vigente.
+- Cada usuario puede leer documentos propios bajo `users/{su UID}/`; solo puede crear, actualizar y borrar cuando su suscripción tenga acceso vigente.
+- El cliente solo tiene acceso a las colecciones financieras que usa la aplicación: `accounts`, `budgets`, `categories`, `fixedExpenseSkips`, `recurringDebts` y `transactions`.
 - Las colecciones raíz heredadas y cualquier ruta no contemplada quedan bloqueadas.
 - Un usuario puede leer su estado de suscripción, pero no modificarlo. Firebase Functions actualiza el documento tras verificar el estado directamente con Mercado Pago.
 - Firebase Storage queda cerrado: la versión actual de 5-5 Finanzas no almacena archivos allí.
@@ -23,10 +23,10 @@ En Firebase Console, agrega `dashboard-dusky-psi-50.vercel.app` a **Authenticati
 2. Si existen, crea y verifica una copia de seguridad. No ejecutes una migración desde el navegador que copie esos datos a cada usuario: las colecciones raíz no tienen necesariamente un propietario verificable.
 3. Migra solo documentos cuya propiedad pueda asociarse de manera fiable con un UID, usando un proceso administrativo controlado. Comprueba las cantidades y los saldos antes de continuar. Si no puedes determinar el dueño, conserva esos documentos en la copia de seguridad hasta resolverlo.
 4. Verifica que los datos actuales estén en `users/{uid}/{colección}/{documento}` y prueba la aplicación con las cuentas existentes.
-5. No publiques las reglas con acceso pagado hasta haber configurado y probado las Functions de pago. Sin una suscripción aprobada, el acceso a datos financieros se deniega.
-6. Prueba las reglas en el emulador de Firebase o en **Rules Playground**: usuario A con suscripción vigente accede a sus documentos; usuario B, usuarios anónimos y un usuario sin suscripción vigente no pueden acceder; las colecciones raíz están denegadas; el cliente no puede escribir en `users/{uid}/subscriptions`.
+5. Configura y prueba las Functions de pago antes de publicar reglas que exigen suscripción para escribir. Los usuarios sin suscripción conservan lectura de sus propios datos, pero no pueden cambiarlos.
+6. Prueba las reglas en el emulador de Firebase o en **Rules Playground**: cada usuario puede leer sus propios datos; solo un usuario con suscripción vigente puede escribir; no puede acceder a datos de otro usuario; las colecciones raíz están denegadas; el cliente no puede escribir en `users/{uid}/subscriptions`.
 
-La publicación de reglas no elimina datos, pero bloquea el acceso del cliente a las rutas que no estén autorizadas. No publiques las reglas de acceso pagado hasta verificar los datos heredados y probar las Functions con credenciales de prueba de Mercado Pago.
+La publicación de reglas no elimina datos. Permite que cada usuario lea sus propios datos y bloquea sus escrituras si no tiene un período pagado vigente. Verifica las rutas existentes y prueba las Functions con credenciales de prueba de Mercado Pago antes de publicar.
 
 ## Publicar reglas de Firestore
 
@@ -43,7 +43,7 @@ La aplicación financiera no utiliza Storage. [`storage.rules`](./storage.rules)
 
 La aplicación ofrece el plan de **$9.900 COP al mes**, sin período de prueba. La tarjeta y el cobro recurrente se procesan en Mercado Pago; sus datos no se guardan en la aplicación.
 
-El flujo usa Firebase Functions en `southamerica-east1`: una callable autenticada crea la suscripción alojada; el webhook valida la firma `x-signature`, consulta la suscripción/pago directamente en la API de Mercado Pago y, solo tras un pago aprobado, escribe el estado en `users/{uid}/subscriptions/mercadopago`. El documento no es editable por el cliente. Las reglas permiten acceder a datos financieros solo mientras `accessUntil` siga vigente.
+El flujo usa Firebase Functions en `southamerica-east1`: una callable autenticada crea la suscripción alojada; el webhook valida la firma `x-signature`, consulta la suscripción/pago directamente en la API de Mercado Pago y, solo tras un pago aprobado, escribe el estado en `users/{uid}/subscriptions/mercadopago`. El documento no es editable por el cliente. Las reglas permiten leer datos financieros propios y solo permiten modificarlos mientras `accessUntil` siga vigente.
 
 ### Configuración y despliegue
 
@@ -76,8 +76,8 @@ El flujo usa Firebase Functions en `southamerica-east1`: una callable autenticad
 
    El webhook queda en `https://southamerica-east1-trading-30254.cloudfunctions.net/mercadoPagoWebhook`. Mercado Pago recibe la URL en cada solicitud de suscripción.
 
-8. En el hosting de la aplicación, configura `VITE_REQUIRE_ACTIVE_SUBSCRIPTION=true` para activar la pantalla de suscripción. La regla del servidor es la protección real de los datos; esta variable solo controla la experiencia de la interfaz.
-9. Con usuarios y tarjetas de prueba, comprueba el ciclo de suscripción, aprobación, denegación, cancelación y notificación repetida. Verifica que un usuario no suscrito no pueda acceder a colecciones financieras y que el documento de suscripción no se pueda escribir desde el cliente.
-10. Solo después de esas pruebas, cambia a credenciales de producción y despliega las reglas pagadas con `firebase deploy --only firestore:rules`. Esto bloqueará el acceso a cualquier cuenta sin un período pagado vigente. Avisa a los usuarios y no lo hagas hasta haber decidido que comienza el cobro real.
+8. El frontend muestra los datos en modo de lectura a usuarios sin suscripción y abre el checkout al intentar una acción que modifica información. La regla de Firestore es la protección real de las escrituras; no depende de una variable de entorno del frontend.
+9. Con usuarios y tarjetas de prueba, comprueba el ciclo de suscripción, aprobación, denegación, cancelación y notificación repetida. Verifica que el usuario sin suscripción pueda leer sus datos propios, no pueda escribir y que el documento de suscripción no se pueda cambiar desde el cliente.
+10. Solo después de esas pruebas, cambia a credenciales de producción y despliega las reglas con `firebase deploy --only firestore:rules`. Esto bloqueará las escrituras de cualquier cuenta sin un período pagado vigente. Avisa a los usuarios antes de iniciar cobros reales.
 
 El despliegue de las reglas de Firestore y el despliegue del frontend son pasos separados. No publiques reglas de acceso pagado antes de tener Functions, credenciales y el checkout probados.

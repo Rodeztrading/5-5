@@ -86,7 +86,7 @@ export const SubscriptionAccess: React.FC<SubscriptionAccessProps> = ({
               ? cancelled
                 ? `Tu suscripción fue cancelada. Mantendrás acceso hasta ${formatDate(subscription?.accessUntil) ?? 'el final del período pagado'}.`
                 : 'Tu suscripción está activa.'
-              : 'Accede a tus cuentas, presupuestos, transacciones e inversiones con una suscripción mensual.'}
+              : 'Puedes consultar tus datos. Para crear, editar, registrar movimientos o ejecutar otras acciones, activa la suscripción mensual.'}
           </p>
 
           {!canAccess && (

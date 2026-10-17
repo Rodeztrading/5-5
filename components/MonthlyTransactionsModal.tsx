@@ -8,9 +8,10 @@ interface MonthlyTransactionsModalProps {
     isOpen: boolean;
     onClose: () => void;
     initialType: TransactionType; // INCOME or EXPENSE
+    canManage: boolean;
 }
 
-export const MonthlyTransactionsModal: React.FC<MonthlyTransactionsModalProps> = ({ isOpen, onClose, initialType }) => {
+export const MonthlyTransactionsModal: React.FC<MonthlyTransactionsModalProps> = ({ isOpen, onClose, initialType, canManage }) => {
     const { user } = useAuth();
     const [currentMonth, setCurrentMonth] = useState(new Date());
     const [transactions, setTransactions] = useState<Transaction[]>([]);
@@ -23,14 +24,14 @@ export const MonthlyTransactionsModal: React.FC<MonthlyTransactionsModalProps> =
             setActiveType(initialType);
             loadTransactions();
         }
-    }, [isOpen, currentMonth, initialType]);
+    }, [isOpen, currentMonth, initialType, canManage]);
 
     // Reload when activeType changes manually by user (if we allow switching tabs inside modal)
     useEffect(() => {
         if (isOpen) {
             loadTransactions();
         }
-    }, [activeType]);
+    }, [activeType, canManage]);
 
     const loadTransactions = async () => {
         if (!user) return;
@@ -39,7 +40,7 @@ export const MonthlyTransactionsModal: React.FC<MonthlyTransactionsModalProps> =
             const monthStr = currentMonth.toISOString().slice(0, 7); // YYYY-MM
             const [allTransactions, categoryData] = await Promise.all([
                 getTransactionsByMonth(monthStr, user.uid),
-                getCategories(user.uid),
+                getCategories(user.uid, canManage),
             ]);
 
             // Unpaid pending expenses remain only in the pending bills list.

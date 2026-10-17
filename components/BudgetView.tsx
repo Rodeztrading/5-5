@@ -48,11 +48,14 @@ import {
     Trash2
 } from 'lucide-react';
 
-interface BudgetViewProps { }
+interface BudgetViewProps {
+    canManage: boolean;
+    onRequireSubscription: () => void;
+}
 
 type Tab = 'ACCOUNTS' | 'CATEGORIES' | 'INVESTMENTS';
 
-export const BudgetView: React.FC<BudgetViewProps> = () => {
+export const BudgetView: React.FC<BudgetViewProps> = ({ canManage, onRequireSubscription }) => {
     const { user } = useAuth();
     const { confirm: confirmAction, dialog: confirmDialog } = useBrandedConfirm();
     const [activeTab, setActiveTab] = useState<Tab>('ACCOUNTS');
@@ -82,18 +85,18 @@ export const BudgetView: React.FC<BudgetViewProps> = () => {
         if (user && (activeTab === 'ACCOUNTS' || activeTab === 'INVESTMENTS')) {
             loadData();
         }
-    }, [user, activeTab, selectedMonth]);
+    }, [user, activeTab, selectedMonth, canManage]);
 
     const loadData = async () => {
         if (!user) return;
         try {
             setLoading(true);
             const [accountsData, transactionsData, summaryData, debtData, categoriesData] = await Promise.all([
-                getAllAccounts(user.uid),
+                getAllAccounts(user.uid, canManage),
                 getAllTransactions(user.uid),
-                getFinancialSummary(user.uid, selectedMonth),
+                getFinancialSummary(user.uid, selectedMonth, canManage),
                 getAllRecurringDebts(user.uid),
-                getCategories(user.uid),
+                getCategories(user.uid, canManage),
             ]);
 
             setAccounts(accountsData);
@@ -109,6 +112,10 @@ export const BudgetView: React.FC<BudgetViewProps> = () => {
     };
 
     const handleAddAccount = async (accountData: Omit<Account, 'id' | 'createdAt'>) => {
+        if (!canManage) {
+            onRequireSubscription();
+            throw new Error('Necesitas una suscripción activa para guardar movimientos.');
+        }
         if (!user) return;
         try {
             await createAccount(accountData, user.uid);
@@ -121,6 +128,10 @@ export const BudgetView: React.FC<BudgetViewProps> = () => {
     };
 
     const handleDeleteAccount = async (account: Account) => {
+        if (!canManage) {
+            onRequireSubscription();
+            return;
+        }
         if (!user) return;
         if (account.defaultKey) return;
         const confirmed = await confirmAction({
@@ -140,6 +151,10 @@ export const BudgetView: React.FC<BudgetViewProps> = () => {
     };
 
     const handleDeleteRecurringDebt = async (debt: RecurringDebt) => {
+        if (!canManage) {
+            onRequireSubscription();
+            return;
+        }
         if (!user) return;
         const confirmed = await confirmAction({
             title: 'Eliminar deuda general',
@@ -161,6 +176,10 @@ export const BudgetView: React.FC<BudgetViewProps> = () => {
         transactionData: Omit<Transaction, 'id' | 'createdAt'>,
         investmentDebt?: Omit<RecurringDebt, 'id' | 'createdAt'>
     ) => {
+        if (!canManage) {
+            onRequireSubscription();
+            return;
+        }
         if (!user) return;
         let createdDebtId: string | undefined;
         try {
@@ -186,6 +205,10 @@ export const BudgetView: React.FC<BudgetViewProps> = () => {
     };
 
     const openInvestmentContribution = (investmentName?: string) => {
+        if (!canManage) {
+            onRequireSubscription();
+            return;
+        }
         setModalInitialBucket(BudgetBucket.INVESTMENT);
         setModalLockedBucket(true);
         setModalInitialType(TransactionType.EXPENSE);
@@ -195,6 +218,10 @@ export const BudgetView: React.FC<BudgetViewProps> = () => {
     };
 
     const openInvestmentIncome = (investmentName: string) => {
+        if (!canManage) {
+            onRequireSubscription();
+            return;
+        }
         setModalInitialBucket(undefined);
         setModalLockedBucket(false);
         setModalInitialType(TransactionType.INCOME);
@@ -310,10 +337,10 @@ export const BudgetView: React.FC<BudgetViewProps> = () => {
                 <section className="rounded-lg border border-gray-800 bg-gray-900/50 p-3 lg:col-span-full">
                     <div className="mb-1 flex items-center justify-between">
                         <h2 className="flex items-center gap-2 text-sm font-semibold text-white"><Wallet className="h-4 w-4 text-rodez-red" /> Cuentas</h2>
-                        <button onClick={() => setShowAddAccount(true)} className="rounded p-1 text-gray-400 hover:bg-gray-800 hover:text-white" title="Agregar cuenta" aria-label="Agregar cuenta"><Plus className="h-4 w-4" /></button>
+                        <button onClick={() => canManage ? setShowAddAccount(true) : onRequireSubscription()} className="rounded p-1 text-gray-400 hover:bg-gray-800 hover:text-white" title="Agregar cuenta" aria-label="Agregar cuenta"><Plus className="h-4 w-4" /></button>
                     </div>
                     {accounts.length === 0 ? (
-                        <button onClick={() => setShowAddAccount(true)} className="flex items-center gap-2 py-2 text-xs text-gray-400 hover:text-white"><Plus className="h-4 w-4" /> Crear cuenta</button>
+                        <button onClick={() => canManage ? setShowAddAccount(true) : onRequireSubscription()} className="flex items-center gap-2 py-2 text-xs text-gray-400 hover:text-white"><Plus className="h-4 w-4" /> Crear cuenta</button>
                     ) : (
                         <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 xl:grid-cols-4">
                             {orderedAccounts.map(account => (
@@ -321,6 +348,10 @@ export const BudgetView: React.FC<BudgetViewProps> = () => {
                                     <button
                                         type="button"
                                         onClick={() => {
+                                            if (!canManage) {
+                                                onRequireSubscription();
+                                                return;
+                                            }
                                             setModalInitialAccountId(account.id);
                                             setModalInitialType(TransactionType.EXPENSE);
                                             setModalAllowedTypes([TransactionType.INCOME, TransactionType.EXPENSE, TransactionType.TRANSFER]);
@@ -350,6 +381,8 @@ export const BudgetView: React.FC<BudgetViewProps> = () => {
                     <BillsView
                         accounts={accounts}
                         onRefresh={loadData}
+                        canManage={canManage}
+                        onRequireSubscription={onRequireSubscription}
                         mode="monthly"
                         month={selectedMonth}
                         newDebtFormRequest={newDebtFormRequest}
@@ -364,7 +397,9 @@ export const BudgetView: React.FC<BudgetViewProps> = () => {
                             </div>
                             <button
                                 type="button"
-                                onClick={() => setNewDebtFormRequest(request => request + 1)}
+                                onClick={() => canManage
+                                    ? setNewDebtFormRequest(request => request + 1)
+                                    : onRequireSubscription()}
                                 className="flex shrink-0 items-center gap-1 rounded bg-rodez-red px-2 py-1.5 text-xs font-medium text-white hover:bg-red-600"
                             >
                                 <Plus className="h-3.5 w-3.5" />
@@ -466,7 +501,12 @@ export const BudgetView: React.FC<BudgetViewProps> = () => {
                 {/* Content */}
                 <div className="min-h-0 flex-1 overflow-y-auto">
                     {activeTab === 'ACCOUNTS' && renderAccountsTab()}
-                    {activeTab === 'CATEGORIES' && <CategoriesView />}
+                    {activeTab === 'CATEGORIES' && (
+                        <CategoriesView
+                            canManage={canManage}
+                            onRequireSubscription={onRequireSubscription}
+                        />
+                    )}
                     {activeTab === 'INVESTMENTS' && (
                         <InvestmentsView
                             accounts={accounts}
@@ -511,6 +551,8 @@ export const BudgetView: React.FC<BudgetViewProps> = () => {
                         .filter(t => t.investmentName)
                         .map(t => t.investmentName as string)
                     ))}
+                    canManage={canManage}
+                    onRequireSubscription={onRequireSubscription}
                 />
             )}
 
@@ -518,6 +560,7 @@ export const BudgetView: React.FC<BudgetViewProps> = () => {
                 isOpen={showMonthlyModal}
                 onClose={() => setShowMonthlyModal(false)}
                 initialType={monthlyModalType}
+                canManage={canManage}
             />
 
             {/* Generic Bucket Detail Modal (Essential, Stability, Rewards) */}

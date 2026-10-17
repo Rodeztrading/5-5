@@ -22,7 +22,12 @@ const BUCKET_CONFIG: Record<BudgetBucket, { label: string; pct: number; color: s
     [BudgetBucket.OTHER]: { label: 'Otro', pct: 0, color: 'text-gray-400', bg: 'bg-gray-500/10', border: 'border-gray-500/30' },
 };
 
-export const CategoriesView: React.FC = () => {
+interface CategoriesViewProps {
+    canManage: boolean;
+    onRequireSubscription: () => void;
+}
+
+export const CategoriesView: React.FC<CategoriesViewProps> = ({ canManage, onRequireSubscription }) => {
     const { user } = useAuth();
     const { confirm: confirmAction, dialog: confirmDialog } = useBrandedConfirm();
     const [categories, setCategories] = useState<Category[]>([]);
@@ -53,12 +58,12 @@ export const CategoriesView: React.FC = () => {
         if (user) {
             loadCategories();
         }
-    }, [user]);
+    }, [user, canManage]);
 
     const loadCategories = async () => {
         if (!user) return;
         try {
-            const data = await getCategories(user.uid);
+            const data = await getCategories(user.uid, canManage);
             setCategories(data);
         } catch (error) {
             console.error('Error loading categories:', error);
@@ -78,6 +83,10 @@ export const CategoriesView: React.FC = () => {
     };
 
     const handleEditCategory = (category: Category) => {
+        if (!canManage) {
+            onRequireSubscription();
+            return;
+        }
         setEditingCategory(category.id);
         setEditingCategoryName(isProtectedRewardsCategory(category) ? 'Recompensas' : category.name);
         setEditingCategoryColor(category.color || PRESET_COLORS[0]);
@@ -85,6 +94,10 @@ export const CategoriesView: React.FC = () => {
     };
 
     const handleSaveCategory = async (categoryId: string) => {
+        if (!canManage) {
+            onRequireSubscription();
+            return;
+        }
         const category = categories.find(item => item.id === categoryId);
         if (!user || !category || !editingCategoryName.trim()) return;
 
@@ -115,6 +128,10 @@ export const CategoriesView: React.FC = () => {
     };
 
     const openCreateModal = () => {
+        if (!canManage) {
+            onRequireSubscription();
+            return;
+        }
         if (activeFilterTab === 'INCOME') {
             setNewCategoryType(TransactionType.INCOME);
             setNewCategoryBucket(BudgetBucket.ESSENTIAL);
@@ -126,6 +143,10 @@ export const CategoriesView: React.FC = () => {
     };
 
     const handleAddNewCategory = async () => {
+        if (!canManage) {
+            onRequireSubscription();
+            return;
+        }
         if (!user || !newCategoryName.trim()) return;
 
         try {
@@ -152,6 +173,10 @@ export const CategoriesView: React.FC = () => {
     };
 
     const handleAddSubcategory = async (categoryId: string) => {
+        if (!canManage) {
+            onRequireSubscription();
+            return;
+        }
         if (!user || !newSubcategoryName.trim()) return;
 
         try {
@@ -195,6 +220,10 @@ export const CategoriesView: React.FC = () => {
     };
 
     const handleSaveFixedSubcategory = async (category: Category, subcategory: Subcategory) => {
+        if (!canManage) {
+            onRequireSubscription();
+            return;
+        }
         if (!user) return;
         const fixedAmount = Number(newSubcategoryAmount);
         const dueDay = Number(newSubcategoryDueDay);
@@ -227,6 +256,10 @@ export const CategoriesView: React.FC = () => {
     };
 
     const handleDeleteSubcategory = async (categoryId: string, subcategoryId: string) => {
+        if (!canManage) {
+            onRequireSubscription();
+            return;
+        }
         if (!user) return;
         const category = categories.find(c => c.id === categoryId);
         const subcategory = category?.subcategories?.find(item => item.id === subcategoryId);
@@ -253,6 +286,10 @@ export const CategoriesView: React.FC = () => {
     };
 
     const handleDeleteCategory = async (category: Category) => {
+        if (!canManage) {
+            onRequireSubscription();
+            return;
+        }
         if (!user) return;
         if (isProtectedRewardsCategory(category)) return;
         const confirmed = await confirmAction({
@@ -575,6 +612,10 @@ export const CategoriesView: React.FC = () => {
                                                 </button>
                                                 <button
                                                     onClick={() => {
+                                                        if (!canManage) {
+                                                            onRequireSubscription();
+                                                            return;
+                                                        }
                                                         setAddingSubcategoryTo(category.id);
                                                         setEditingFixedSubcategoryId(null);
                                                         setExpandedCategories(prev => new Set(prev).add(category.id));
@@ -611,6 +652,10 @@ export const CategoriesView: React.FC = () => {
                                                         {isExpense && <button
                                                             type="button"
                                                             onClick={() => {
+                                                                if (!canManage) {
+                                                                    onRequireSubscription();
+                                                                    return;
+                                                                }
                                                                 setAddingSubcategoryTo(null);
                                                                 setEditingFixedSubcategoryId(editingFixedSubcategoryId === sub.id ? null : sub.id);
                                                                 setNewSubcategoryIsFixed(Boolean(sub.isFixedExpense));

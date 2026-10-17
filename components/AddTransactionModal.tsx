@@ -51,6 +51,8 @@ interface AddTransactionModalProps {
     initialType?: TransactionType;  // Pre-selecciona el tipo de transacción
     allowedTypes?: TransactionType[]; // Si se define, solo permite estos tipos (ej: [INCOME, TRANSFER])
     initialInvestmentName?: string;
+    canManage: boolean;
+    onRequireSubscription: () => void;
 }
 
 export const AddTransactionModal: React.FC<AddTransactionModalProps> = ({
@@ -64,6 +66,8 @@ export const AddTransactionModal: React.FC<AddTransactionModalProps> = ({
     initialType,
     allowedTypes,
     initialInvestmentName,
+    canManage,
+    onRequireSubscription,
 }) => {
     const { user } = useAuth();
     const [type, setType] = useState<TransactionType>(
@@ -137,12 +141,12 @@ export const AddTransactionModal: React.FC<AddTransactionModalProps> = ({
 
     useEffect(() => {
         if (user) loadCategories();
-    }, [user]);
+    }, [user, canManage]);
 
     const loadCategories = async () => {
         if (!user) return;
         try {
-            const data = await getCategories(user.uid);
+            const data = await getCategories(user.uid, canManage);
             setCategories(data);
         } catch (error) {
             console.error('Error loading categories:', error);
@@ -223,6 +227,10 @@ export const AddTransactionModal: React.FC<AddTransactionModalProps> = ({
     // ── Submit ──────────────────────────────────────────────────────────────
     const handleSubmit = async (e: React.FormEvent) => {
         e.preventDefault();
+        if (!canManage) {
+            onRequireSubscription();
+            return;
+        }
         if (!amount || !description || !effectiveAccountId) return;
 
         // For income, validate total doesn't exceed 100%
