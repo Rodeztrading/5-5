@@ -3,8 +3,8 @@ import { createHmac, timingSafeEqual } from 'node:crypto';
 export const SUBSCRIPTION_PRICE_COP = 9900;
 export const SUBSCRIPTION_DOCUMENT_ID = 'mercadopago';
 
-export function getPayerEmail({ accessToken, authenticatedEmail, testPayerEmail }) {
-  if (accessToken.startsWith('TEST-')) {
+export function getPayerEmail({ testMode, authenticatedEmail, testPayerEmail }) {
+  if (testMode) {
     const email = testPayerEmail?.trim();
     if (!email || !email.includes('@')) {
       throw new Error('A valid Mercado Pago test buyer email is required.');
@@ -13,6 +13,44 @@ export function getPayerEmail({ accessToken, authenticatedEmail, testPayerEmail 
   }
 
   return authenticatedEmail;
+}
+
+export function shouldReplacePendingCheckout({ testMode, payerEmail, existingPayerEmail }) {
+  return testMode && existingPayerEmail !== payerEmail;
+}
+
+export function isSuccessfulAuthorizedPayment(status) {
+  return status === 'approved' || status === 'processed';
+}
+
+export function getPreapprovalNextPaymentDate(preapproval) {
+  return preapproval?.auto_recurring?.next_payment_date
+    ?? preapproval?.next_payment_date
+    ?? null;
+}
+
+export function isMissingMercadoPagoResource(error) {
+  return error?.status === 404;
+}
+
+export function shouldAcceptVerifiedPaidSubscription({
+  storedSubscriptionId,
+  incomingSubscriptionId,
+  storedStatus,
+  providerStatus,
+  paymentStatus,
+  amount,
+  currency,
+}) {
+  if (storedSubscriptionId === incomingSubscriptionId) {
+    return true;
+  }
+
+  return storedStatus !== 'active'
+    && providerStatus === 'authorized'
+    && isSuccessfulAuthorizedPayment(paymentStatus)
+    && amount === SUBSCRIPTION_PRICE_COP
+    && currency === 'COP';
 }
 
 export function verifyMercadoPagoSignature({ signatureHeader, requestId, dataId, secret }) {

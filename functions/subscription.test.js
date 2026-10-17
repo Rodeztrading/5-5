@@ -4,6 +4,11 @@ import test from 'node:test';
 import {
   getNotificationResource,
   getPayerEmail,
+  getPreapprovalNextPaymentDate,
+  isMissingMercadoPagoResource,
+  isSuccessfulAuthorizedPayment,
+  shouldReplacePendingCheckout,
+  shouldAcceptVerifiedPaidSubscription,
   verifyMercadoPagoSignature,
 } from './subscription.js';
 
@@ -51,20 +56,92 @@ test('reads subscription webhooks from query parameters and rejects mismatched I
   }), null);
 });
 
-test('uses a Mercado Pago test buyer for test tokens and Firebase email for production', () => {
+test('uses the configured Mercado Pago buyer only in explicit test mode', () => {
   assert.equal(getPayerEmail({
-    accessToken: 'TEST-token',
+    testMode: true,
     authenticatedEmail: 'google@example.com',
     testPayerEmail: 'buyer@testuser.com',
   }), 'buyer@testuser.com');
   assert.equal(getPayerEmail({
-    accessToken: 'APP_USR-token',
+    testMode: false,
     authenticatedEmail: 'customer@example.com',
-    testPayerEmail: '',
+    testPayerEmail: 'buyer@testuser.com',
   }), 'customer@example.com');
   assert.throws(() => getPayerEmail({
-    accessToken: 'TEST-token',
+    testMode: true,
     authenticatedEmail: 'google@example.com',
     testPayerEmail: '',
   }));
+});
+
+test('replaces a pending checkout when its test buyer email changes', () => {
+  assert.equal(shouldReplacePendingCheckout({
+    testMode: true,
+    payerEmail: 'new-buyer@testuser.com',
+    existingPayerEmail: undefined,
+  }), true);
+  assert.equal(shouldReplacePendingCheckout({
+    testMode: true,
+    payerEmail: 'buyer@testuser.com',
+    existingPayerEmail: 'buyer@testuser.com',
+  }), false);
+  assert.equal(shouldReplacePendingCheckout({
+    testMode: false,
+    payerEmail: 'customer@example.com',
+    existingPayerEmail: 'previous@example.com',
+  }), false);
+});
+
+test('recognizes processed authorized payments as successful', () => {
+  assert.equal(isSuccessfulAuthorizedPayment('approved'), true);
+  assert.equal(isSuccessfulAuthorizedPayment('processed'), true);
+  assert.equal(isSuccessfulAuthorizedPayment('pending'), false);
+  assert.equal(isSuccessfulAuthorizedPayment('rejected'), false);
+});
+
+test('reads the next payment date from Mercado Pago response shapes', () => {
+  assert.equal(getPreapprovalNextPaymentDate({
+    next_payment_date: '2026-11-15T22:58:23.000-04:00',
+  }), '2026-11-15T22:58:23.000-04:00');
+  assert.equal(getPreapprovalNextPaymentDate({
+    auto_recurring: { next_payment_date: '2026-11-15T22:58:23.000-04:00' },
+    next_payment_date: '2026-12-15T22:58:23.000-04:00',
+  }), '2026-11-15T22:58:23.000-04:00');
+  assert.equal(getPreapprovalNextPaymentDate({}), null);
+});
+
+test('recognizes nonexistent Mercado Pago resources without masking server failures', () => {
+  assert.equal(isMissingMercadoPagoResource({ status: 404 }), true);
+  assert.equal(isMissingMercadoPagoResource({ status: 500 }), false);
+  assert.equal(isMissingMercadoPagoResource(new Error('network failure')), false);
+});
+
+test('accepts a provider-verified paid subscription that replaced a stale pending checkout', () => {
+  assert.equal(shouldAcceptVerifiedPaidSubscription({
+    storedSubscriptionId: 'stale-subscription',
+    incomingSubscriptionId: 'paid-subscription',
+    storedStatus: 'pending',
+    providerStatus: 'authorized',
+    paymentStatus: 'processed',
+    amount: 9900,
+    currency: 'COP',
+  }), true);
+  assert.equal(shouldAcceptVerifiedPaidSubscription({
+    storedSubscriptionId: 'stale-subscription',
+    incomingSubscriptionId: 'paid-subscription',
+    storedStatus: 'pending',
+    providerStatus: 'authorized',
+    paymentStatus: 'processed',
+    amount: 9901,
+    currency: 'COP',
+  }), false);
+  assert.equal(shouldAcceptVerifiedPaidSubscription({
+    storedSubscriptionId: 'current-subscription',
+    incomingSubscriptionId: 'other-subscription',
+    storedStatus: 'active',
+    providerStatus: 'authorized',
+    paymentStatus: 'processed',
+    amount: 9900,
+    currency: 'COP',
+  }), false);
 });

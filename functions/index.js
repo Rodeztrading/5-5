@@ -7,6 +7,11 @@ import { logger } from 'firebase-functions';
 import {
   getNotificationResource,
   getPayerEmail,
+  getPreapprovalNextPaymentDate,
+  isMissingMercadoPagoResource,
+  isSuccessfulAuthorizedPayment,
+  shouldReplacePendingCheckout,
+  shouldAcceptVerifiedPaidSubscription,
   SUBSCRIPTION_DOCUMENT_ID,
   SUBSCRIPTION_PRICE_COP,
   verifyMercadoPagoSignature,
@@ -19,6 +24,7 @@ const region = 'southamerica-east1';
 const mercadoPagoAccessToken = defineSecret('MERCADOPAGO_ACCESS_TOKEN');
 const mercadoPagoWebhookSecret = defineSecret('MERCADOPAGO_WEBHOOK_SECRET');
 const appBaseUrl = defineString('APP_BASE_URL');
+const mercadoPagoTestMode = defineString('MERCADOPAGO_TEST_MODE', { default: 'false' });
 const mercadoPagoTestPayerEmail = defineString('MERCADOPAGO_TEST_PAYER_EMAIL', { default: '' });
 
 function subscriptionRef(uid) {
@@ -53,12 +59,15 @@ async function mercadoPagoRequest(path, { method = 'GET', body, idempotencyKey }
 
   const responseBody = await response.json().catch(() => null);
   if (!response.ok) {
-    logger.error('Mercado Pago API request failed', {
+    const log = response.status === 404 ? logger.warn : logger.error;
+    log('Mercado Pago API request failed', {
       path,
       status: response.status,
       providerError: responseBody?.message ?? responseBody?.error ?? 'unknown',
     });
-    throw new Error(`Mercado Pago returned HTTP ${response.status}`);
+    throw Object.assign(new Error(`Mercado Pago returned HTTP ${response.status}`), {
+      status: response.status,
+    });
   }
 
   return responseBody;
@@ -82,10 +91,11 @@ export const createMercadoPagoSubscription = onCall(
     }
 
     const accessToken = mercadoPagoAccessToken.value();
+    const testMode = mercadoPagoTestMode.value().trim().toLowerCase() === 'true';
     let payerEmail;
     try {
       payerEmail = getPayerEmail({
-        accessToken,
+        testMode,
         authenticatedEmail: email,
         testPayerEmail: mercadoPagoTestPayerEmail.value(),
       });
@@ -101,6 +111,14 @@ export const createMercadoPagoSubscription = onCall(
     let activeLockId = lockId;
     let checkoutUrl;
     let createdSubscription = false;
+    const testPayerEmail = mercadoPagoTestPayerEmail.value().trim();
+
+    logger.info('Preparing Mercado Pago subscription request', {
+      testModeEnabled: testMode,
+      testPayerConfigured: Boolean(testPayerEmail),
+      payerMatchesConfiguredTestBuyer: payerEmail === testPayerEmail,
+      payerUsesTestUserDomain: payerEmail.endsWith('@testuser.com'),
+    });
 
     try {
       const result = await db.runTransaction(async (transaction) => {
@@ -111,7 +129,32 @@ export const createMercadoPagoSubscription = onCall(
         }
 
         if (existing?.status === 'pending' && existing.initPoint) {
-          return { initPoint: existing.initPoint, reused: true };
+          if (!shouldReplacePendingCheckout({
+            testMode,
+            payerEmail,
+            existingPayerEmail: existing.payerEmail,
+          })) {
+            return { initPoint: existing.initPoint, reused: true };
+          }
+
+          transaction.set(ref, {
+            provider: 'mercadopago',
+            status: 'creating',
+            createLockId: lockId,
+            createStartedAt: Timestamp.now(),
+            checkoutEmail: email,
+            replacingProviderSubscriptionId: existing.providerSubscriptionId ?? null,
+            providerSubscriptionId: FieldValue.delete(),
+            initPoint: FieldValue.delete(),
+            updatedAt: FieldValue.serverTimestamp(),
+          }, { merge: true });
+
+          return {
+            reused: false,
+            lockId,
+            email,
+            staleProviderId: existing.providerSubscriptionId,
+          };
         }
 
         if (existing?.status === 'creating' && typeof existing.createLockId === 'string') {
@@ -143,6 +186,12 @@ export const createMercadoPagoSubscription = onCall(
       } else {
         const requestLockId = result.lockId;
         activeLockId = requestLockId;
+        if (result.staleProviderId) {
+          await mercadoPagoRequest(
+            `/preapproval/${encodeURIComponent(result.staleProviderId)}`,
+            { method: 'PUT', body: { status: 'cancelled' } }
+          );
+        }
         const baseUrl = getAppBaseUrl();
         const projectId = process.env.GCLOUD_PROJECT;
         const webhookUrl = `https://${region}-${projectId}.cloudfunctions.net/mercadoPagoWebhook`;
@@ -182,12 +231,14 @@ export const createMercadoPagoSubscription = onCall(
             providerSubscriptionId: preapproval.id,
             status: 'pending',
             initPoint: preapproval.init_point,
+            payerEmail,
             externalReference: uid,
             amount: SUBSCRIPTION_PRICE_COP,
             currency: 'COP',
             createLockId: FieldValue.delete(),
             createStartedAt: FieldValue.delete(),
             checkoutEmail: FieldValue.delete(),
+            replacingProviderSubscriptionId: FieldValue.delete(),
             updatedAt: FieldValue.serverTimestamp(),
           }, { merge: true });
         });
@@ -207,6 +258,7 @@ export const createMercadoPagoSubscription = onCall(
           createLockId: FieldValue.delete(),
           createStartedAt: FieldValue.delete(),
           checkoutEmail: FieldValue.delete(),
+          replacingProviderSubscriptionId: FieldValue.delete(),
           updatedAt: FieldValue.serverTimestamp(),
         }, { merge: true });
       }
@@ -277,9 +329,29 @@ async function reconcilePreapproval(preapproval, paymentStatus) {
   const ref = subscriptionRef(uid);
   const currentSnapshot = await ref.get();
   const current = currentSnapshot.data();
+  if (current?.replacingProviderSubscriptionId === preapproval.id) {
+    logger.info('Ignoring webhook for replaced Mercado Pago test subscription', {
+      uid,
+      providerId: preapproval.id,
+    });
+    return;
+  }
+
   const webhookArrivedBeforeCheckoutWasStored = current?.status === 'creating'
     && typeof current.createLockId === 'string';
-  if ((!webhookArrivedBeforeCheckoutWasStored && current?.providerSubscriptionId !== preapproval.id)
+  const paymentSucceeded = isSuccessfulAuthorizedPayment(paymentStatus);
+  const verifiedPaidSubscriptionCanReplacePendingCheckout = shouldAcceptVerifiedPaidSubscription({
+    storedSubscriptionId: current?.providerSubscriptionId,
+    incomingSubscriptionId: preapproval.id,
+    storedStatus: current?.status,
+    providerStatus: preapproval.status,
+    paymentStatus,
+    amount: preapproval.auto_recurring?.transaction_amount,
+    currency: preapproval.auto_recurring?.currency_id,
+  });
+  if ((!webhookArrivedBeforeCheckoutWasStored
+      && current?.providerSubscriptionId !== preapproval.id
+      && !verifiedPaidSubscriptionCanReplacePendingCheckout)
     || (current?.externalReference && current.externalReference !== uid)) {
     logger.warn('Ignoring Mercado Pago event that does not match the stored subscription', {
       uid,
@@ -289,10 +361,8 @@ async function reconcilePreapproval(preapproval, paymentStatus) {
   }
 
   const providerAuthorized = preapproval.status === 'authorized';
-  const paymentApproved = paymentStatus === 'approved';
-  const accessUntilDate = preapproval.auto_recurring?.next_payment_date
-    ? new Date(preapproval.auto_recurring.next_payment_date)
-    : null;
+  const nextPaymentDate = getPreapprovalNextPaymentDate(preapproval);
+  const accessUntilDate = nextPaymentDate ? new Date(nextPaymentDate) : null;
   const validAccessUntil = accessUntilDate && !Number.isNaN(accessUntilDate.getTime())
     ? Timestamp.fromDate(accessUntilDate)
     : null;
@@ -306,13 +376,29 @@ async function reconcilePreapproval(preapproval, paymentStatus) {
     status = 'paused';
   } else if (subscriptionWasCancelledLocally) {
     status = 'cancelled';
-  } else if (providerAuthorized && (paymentApproved || currentAccessUntil)) {
+  } else if (providerAuthorized && (paymentSucceeded || currentAccessUntil)) {
     status = 'active';
-  } else if (paymentStatus && paymentStatus !== 'approved') {
+  } else if (paymentStatus && !paymentSucceeded) {
     status = 'past_due';
   }
 
-  const renewedAccessUntil = paymentApproved ? validAccessUntil : currentAccessUntil;
+  const renewedAccessUntil = paymentSucceeded ? validAccessUntil : currentAccessUntil;
+  if (verifiedPaidSubscriptionCanReplacePendingCheckout
+    && current?.providerSubscriptionId
+    && current.providerSubscriptionId !== preapproval.id) {
+    const staleSubscription = await fetchPreapproval(current.providerSubscriptionId);
+    if (staleSubscription.status !== 'cancelled') {
+      await mercadoPagoRequest(
+        `/preapproval/${encodeURIComponent(current.providerSubscriptionId)}`,
+        { method: 'PUT', body: { status: 'cancelled' } }
+      );
+      logger.info('Cancelled stale Mercado Pago subscription after verified payment', {
+        uid,
+        paidProviderId: preapproval.id,
+      });
+    }
+  }
+
   await ref.set({
     provider: 'mercadopago',
     providerSubscriptionId: preapproval.id,
@@ -324,7 +410,7 @@ async function reconcilePreapproval(preapproval, paymentStatus) {
     accessUntil: status === 'active'
       ? (renewedAccessUntil ?? FieldValue.delete())
       : (currentAccessUntil ?? FieldValue.delete()),
-    nextPaymentAt: paymentApproved ? (validAccessUntil ?? FieldValue.delete()) : FieldValue.delete(),
+    nextPaymentAt: paymentSucceeded ? (validAccessUntil ?? FieldValue.delete()) : FieldValue.delete(),
     lastPaymentStatus: paymentStatus ?? current?.lastPaymentStatus ?? null,
     initPoint: status === 'pending' && typeof preapproval.init_point === 'string'
       ? preapproval.init_point
@@ -379,6 +465,15 @@ export const mercadoPagoWebhook = onRequest(
 
       response.status(200).send('OK');
     } catch (error) {
+      if (isMissingMercadoPagoResource(error)) {
+        logger.warn('Acknowledging Mercado Pago webhook for a missing provider resource', {
+          type: notification.type,
+          resourceId: notification.id,
+        });
+        response.status(200).send('Resource not found');
+        return;
+      }
+
       logger.error('Mercado Pago webhook processing failed', { type: notification.type, error });
       response.status(500).send('Webhook processing failed');
     }
