@@ -128,43 +128,6 @@ export const createMercadoPagoSubscription = onCall(
           throw new HttpsError('already-exists', 'Tu suscripción ya está activa.');
         }
 
-        if (existing?.status === 'pending' && existing.initPoint) {
-          if (!shouldReplacePendingCheckout({
-            testMode,
-            payerEmail,
-            existingPayerEmail: existing.payerEmail,
-          })) {
-            return { initPoint: existing.initPoint, reused: true };
-          }
-
-          transaction.set(ref, {
-            provider: 'mercadopago',
-            status: 'creating',
-            createLockId: lockId,
-            createStartedAt: Timestamp.now(),
-            checkoutEmail: email,
-            replacingProviderSubscriptionId: existing.providerSubscriptionId ?? null,
-            providerSubscriptionId: FieldValue.delete(),
-            initPoint: FieldValue.delete(),
-            updatedAt: FieldValue.serverTimestamp(),
-          }, { merge: true });
-
-          return {
-            reused: false,
-            lockId,
-            email,
-            staleProviderId: existing.providerSubscriptionId,
-          };
-        }
-
-        if (existing?.status === 'creating' && typeof existing.createLockId === 'string') {
-          return {
-            reused: false,
-            lockId: existing.createLockId,
-            email: existing.checkoutEmail ?? email,
-          };
-        }
-
         if (existing?.status === 'cancelled' && hasUnexpiredAccess(existing)) {
           throw new HttpsError('failed-precondition', 'Tu acceso actual sigue activo hasta finalizar el período pagado.');
         }
@@ -175,26 +138,43 @@ export const createMercadoPagoSubscription = onCall(
           createLockId: lockId,
           createStartedAt: Timestamp.now(),
           checkoutEmail: email,
+          replacingProviderSubscriptionId: existing?.providerSubscriptionId ?? null,
+          providerSubscriptionId: FieldValue.delete(),
+          initPoint: FieldValue.delete(),
           updatedAt: FieldValue.serverTimestamp(),
         }, { merge: true });
 
-        return { reused: false, lockId, email };
+        return {
+          reused: false,
+          lockId,
+          email,
+          staleProviderId: existing?.providerSubscriptionId,
+        };
       });
 
       if (result.reused) {
         checkoutUrl = result.initPoint;
       } else {
         const requestLockId = result.lockId;
-        activeLockId = requestLockId;
         if (result.staleProviderId) {
-          await mercadoPagoRequest(
-            `/preapproval/${encodeURIComponent(result.staleProviderId)}`,
-            { method: 'PUT', body: { status: 'cancelled' } }
-          );
+          try {
+            const stale = await fetchPreapproval(result.staleProviderId);
+            if (stale.status === 'pending' && !(stale.summarized?.charged_quantity > 0)) {
+              await mercadoPagoRequest(
+                `/preapproval/${encodeURIComponent(result.staleProviderId)}`,
+                { method: 'PUT', body: { status: 'cancelled' } }
+              );
+            }
+          } catch {
+            // Ignorar errores al limpiar preapproval obsoleto
+          }
         }
         const baseUrl = getAppBaseUrl();
-        const projectId = process.env.GCLOUD_PROJECT;
-        const webhookUrl = `https://${region}-${projectId}.cloudfunctions.net/mercadoPagoWebhook`;
+        // Firebase Functions v2 (Gen 2) runs on Cloud Run. The .cloudfunctions.net
+        // URL is an alias that may not accept inbound POST requests from Mercado Pago.
+        // The direct Cloud Run service URI is the reliable endpoint.
+        const webhookUrl = `https://mercadopagowebhook-ggjzv7ouxa-rj.a.run.app`;
+        logger.info('Registering Mercado Pago webhook URL', { webhookUrl });
         const preapproval = await mercadoPagoRequest('/preapproval', {
           method: 'POST',
           idempotencyKey: requestLockId,
@@ -339,16 +319,29 @@ async function reconcilePreapproval(preapproval, paymentStatus) {
 
   const webhookArrivedBeforeCheckoutWasStored = current?.status === 'creating'
     && typeof current.createLockId === 'string';
-  const paymentSucceeded = isSuccessfulAuthorizedPayment(paymentStatus);
+
+  const providerAuthorized = preapproval.status === 'authorized';
+  const nextPaymentDate = getPreapprovalNextPaymentDate(preapproval);
+  const accessUntilDate = nextPaymentDate ? new Date(nextPaymentDate) : null;
+  const validAccessUntil = accessUntilDate && !Number.isNaN(accessUntilDate.getTime())
+    ? Timestamp.fromDate(accessUntilDate)
+    : null;
+  const hasFutureAccess = validAccessUntil && validAccessUntil.toMillis() > Date.now();
+  const paymentSucceeded = isSuccessfulAuthorizedPayment(paymentStatus)
+    || preapproval.summarized?.semaphore === 'green'
+    || (preapproval.summarized?.charged_quantity ?? 0) > 0
+    || (providerAuthorized && hasFutureAccess);
+
   const verifiedPaidSubscriptionCanReplacePendingCheckout = shouldAcceptVerifiedPaidSubscription({
     storedSubscriptionId: current?.providerSubscriptionId,
     incomingSubscriptionId: preapproval.id,
     storedStatus: current?.status,
     providerStatus: preapproval.status,
-    paymentStatus,
+    paymentStatus: paymentSucceeded ? 'approved' : paymentStatus,
     amount: preapproval.auto_recurring?.transaction_amount,
     currency: preapproval.auto_recurring?.currency_id,
   });
+
   if ((!webhookArrivedBeforeCheckoutWasStored
       && current?.providerSubscriptionId !== preapproval.id
       && !verifiedPaidSubscriptionCanReplacePendingCheckout)
@@ -360,29 +353,23 @@ async function reconcilePreapproval(preapproval, paymentStatus) {
     return;
   }
 
-  const providerAuthorized = preapproval.status === 'authorized';
-  const nextPaymentDate = getPreapprovalNextPaymentDate(preapproval);
-  const accessUntilDate = nextPaymentDate ? new Date(nextPaymentDate) : null;
-  const validAccessUntil = accessUntilDate && !Number.isNaN(accessUntilDate.getTime())
-    ? Timestamp.fromDate(accessUntilDate)
-    : null;
   const currentAccessUntil = hasUnexpiredAccess(current) ? current.accessUntil : null;
   const subscriptionWasCancelledLocally = current?.status === 'cancelled';
 
   let status = 'pending';
   if (preapproval.status === 'cancelled') {
-    status = 'cancelled';
+    status = hasFutureAccess ? 'active' : 'cancelled';
   } else if (preapproval.status === 'paused') {
     status = 'paused';
   } else if (subscriptionWasCancelledLocally) {
-    status = 'cancelled';
-  } else if (providerAuthorized && (paymentSucceeded || currentAccessUntil)) {
+    status = hasFutureAccess ? 'active' : 'cancelled';
+  } else if (providerAuthorized && (paymentSucceeded || currentAccessUntil || hasFutureAccess)) {
     status = 'active';
   } else if (paymentStatus && !paymentSucceeded) {
     status = 'past_due';
   }
 
-  const renewedAccessUntil = paymentSucceeded ? validAccessUntil : currentAccessUntil;
+  const renewedAccessUntil = (paymentSucceeded || hasFutureAccess) ? validAccessUntil : currentAccessUntil;
   if (verifiedPaidSubscriptionCanReplacePendingCheckout
     && current?.providerSubscriptionId
     && current.providerSubscriptionId !== preapproval.id) {
@@ -410,8 +397,8 @@ async function reconcilePreapproval(preapproval, paymentStatus) {
     accessUntil: status === 'active'
       ? (renewedAccessUntil ?? FieldValue.delete())
       : (currentAccessUntil ?? FieldValue.delete()),
-    nextPaymentAt: paymentSucceeded ? (validAccessUntil ?? FieldValue.delete()) : FieldValue.delete(),
-    lastPaymentStatus: paymentStatus ?? current?.lastPaymentStatus ?? null,
+    nextPaymentAt: (paymentSucceeded || hasFutureAccess) ? (validAccessUntil ?? FieldValue.delete()) : FieldValue.delete(),
+    lastPaymentStatus: paymentStatus ?? (paymentSucceeded ? 'approved' : current?.lastPaymentStatus ?? null),
     initPoint: status === 'pending' && typeof preapproval.init_point === 'string'
       ? preapproval.init_point
       : FieldValue.delete(),
@@ -420,7 +407,87 @@ async function reconcilePreapproval(preapproval, paymentStatus) {
     checkoutEmail: FieldValue.delete(),
     updatedAt: FieldValue.serverTimestamp(),
   }, { merge: true });
+
+  logger.info('Reconciled Mercado Pago subscription', { uid, providerId: preapproval.id, status });
 }
+
+export const syncMercadoPagoSubscription = onCall(
+  { region, secrets: [mercadoPagoAccessToken] },
+  async (request) => {
+    if (!request.auth) {
+      throw new HttpsError('unauthenticated', 'Inicia sesión para continuar.');
+    }
+    const uid = request.auth.uid;
+    const ref = subscriptionRef(uid);
+    const snap = await ref.get();
+    const data = snap.data();
+    let preapproval = null;
+
+    if (data?.providerSubscriptionId) {
+      try {
+        preapproval = await fetchPreapproval(data.providerSubscriptionId);
+      } catch (err) {
+        logger.warn('Failed to fetch stored providerSubscriptionId', { err });
+      }
+    }
+
+    if (!preapproval || preapproval.status !== 'authorized') {
+      const searchRes = await mercadoPagoRequest(
+        `/preapproval/search?external_reference=${encodeURIComponent(uid)}&status=authorized`
+      );
+      if (searchRes?.results?.length > 0) {
+        preapproval = searchRes.results[0];
+      }
+    }
+
+    if (!preapproval) {
+      return { status: data?.status ?? 'inactive', synced: false };
+    }
+
+    await reconcilePreapproval(preapproval, 'approved');
+    const updatedSnap = await ref.get();
+    return { status: updatedSnap.data()?.status ?? 'active', synced: true };
+  }
+);
+
+export const syncSubscriptionManual = onRequest(
+  { region, secrets: [mercadoPagoAccessToken] },
+  async (request, response) => {
+    try {
+      const searchRes = await mercadoPagoRequest('/preapproval/search?sort=date_created:desc&limit=50');
+      const results = searchRes?.results ?? [];
+      const updated = [];
+      const processedUids = new Set();
+
+      for (const preapproval of results) {
+        const uid = preapproval.external_reference;
+        if (!uid || typeof uid !== 'string' || processedUids.has(uid)) {
+          continue;
+        }
+
+        const isPaid = (preapproval.summarized?.charged_quantity ?? 0) > 0
+          || preapproval.summarized?.semaphore === 'green';
+        const isAuthorized = preapproval.status === 'authorized';
+
+        if (isPaid || isAuthorized) {
+          await reconcilePreapproval(preapproval, isPaid ? 'approved' : null);
+          updated.push({
+            uid,
+            id: preapproval.id,
+            status: 'active',
+            nextPayment: preapproval.next_payment_date,
+            charged: preapproval.summarized?.charged_amount ?? 9900,
+          });
+          processedUids.add(uid);
+        }
+      }
+      response.json({ success: true, updatedCount: updated.length, updated });
+    } catch (error) {
+      logger.error('syncSubscriptionManual failed', error);
+      response.status(500).json({ success: false, error: error.message });
+    }
+  }
+);
 
 export const mercadoPagoWebhook = onRequest(
   { region, secrets: [mercadoPagoAccessToken, mercadoPagoWebhookSecret] },

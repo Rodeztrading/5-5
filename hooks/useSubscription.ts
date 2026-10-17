@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useCallback } from 'react';
 import { onSnapshot, Timestamp, doc } from 'firebase/firestore';
 import { httpsCallable } from 'firebase/functions';
 import { app, db, functions } from '../config/firebase';
@@ -20,6 +20,28 @@ export function useSubscription(uid: string) {
   const [subscription, setSubscription] = useState<Subscription | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+
+  const sync = useCallback(async () => {
+    try {
+      const syncFn = httpsCallable<Record<string, never>, { status: string; synced: boolean }>(
+        functions,
+        'syncMercadoPagoSubscription'
+      );
+      await syncFn({});
+    } catch (err) {
+      console.warn('Sync subscription check failed:', err);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (typeof window !== 'undefined' && window.location.search.includes('subscription=return')) {
+      sync().finally(() => {
+        const url = new URL(window.location.href);
+        url.searchParams.delete('subscription');
+        window.history.replaceState({}, document.title, url.toString());
+      });
+    }
+  }, [sync]);
 
   useEffect(() => {
     setLoading(true);
@@ -67,5 +89,5 @@ export function useSubscription(uid: string) {
     await cancelSubscription({});
   };
 
-  return { subscription, loading, error, setError, startCheckout, cancel };
+  return { subscription, loading, error, setError, startCheckout, cancel, sync };
 }
